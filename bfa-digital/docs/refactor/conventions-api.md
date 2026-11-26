@@ -24,7 +24,7 @@ Las fija el orquestador. Son obligatorias para todas las instancias del enjambre
    - Asignación: el backend manda `status` con `GENERADO|ACTIVO|VENCIDO|REVOCADO` y `state` con `no-iniciado|en-progreso|completado|interrumpido|anulado` (ver `SessionAssignmentDto`). Modela ambos tal cual, como `linkStatus` y `attemptState`.
    - Intento/subtest: `NO_INICIADO | EN_PROGRESO | COMPLETADO | INTERRUMPIDO | ANULADO`.
    - Versión: `BORRADOR | EN_REVISION | APROBADO | PUBLICADO | RETIRADO` (fuente: `EstadoVersionTest.java`; el `types.ts` legacy está mal).
-6. No modifiques los servicios legacy (`*Service.ts`, `types.ts`, `participantMappers.ts`) ni las pantallas: F-05 solo **agrega** archivos. La migración de pantallas es de la Fase 1 en adelante.
+6. (Histórico, F-05) Los servicios legacy (`*Service.ts`, `participantMappers.ts`) y las pantallas viejas se eliminaron en F-06; `types.ts` conserva solo los DTOs de auth.
 7. Cada instancia toca **solo** sus archivos `<d>`. Prohibido editar `client.ts`, `errors.ts`, `package.json` o configs.
 8. ESLint estricto aplica a `src/api/schemas/**` y `src/api/endpoints/**` (sin `any` ni vars sin usar). Verifica con `npx eslint src/api/schemas/<d>.ts src/api/endpoints/<d>.ts` y `npx vitest run src/api/endpoints/<d>.test.ts`. El typecheck global (`npm run typecheck`) debe seguir en verde.
 9. Query keys: el prefijo `runtime` (p. ej. `['runtime', 'evaluation', assignmentId]`) está reservado para los datos del participante. `resetAccountScopedState` (logout/401/cambio de cuenta de staff) elimina todas las queries y mutations cuya key NO empiece por `runtime`; nunca uses ese prefijo para datos de staff.

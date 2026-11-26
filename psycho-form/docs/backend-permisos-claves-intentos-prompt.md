@@ -149,3 +149,41 @@ Al terminar, reportar los archivos modificados, las migraciones creadas y el res
 - Edición válida.
 - Colisión → 409.
 - Sin permiso → 403.
+
+---
+
+## B19. Descarga de reportes generados
+
+### Problema
+`ReportController` (`/reports`) solo expone `GET /reports`, `POST /reports/individual` y `POST /reports/aggregate`. Los tres devuelven el registro `ReporteGenerado`, con su `rutaAlmacenamiento`. No hay forma de descargar el archivo generado. El frontend ya tiene el helper de descarga (blob + `Content-Disposition`).
+
+### Cambios
+1. Agregar `GET /reports/{id}/file` con `@PreAuthorize(REPORTE_EXPORTAR)`.
+2. Devolver el binario con `Content-Type` correcto (PDF/CSV/XLSX según el formato) y `Content-Disposition: attachment; filename="<nombre>"`, con el nombre codificado para RFC 5987 si tiene caracteres no ASCII.
+3. Responder 404 si el registro no existe o el archivo ya no está en el almacenamiento.
+4. Validar que `rutaAlmacenamiento` quede dentro del directorio de reportes, para evitar path traversal.
+5. Si el proyecto ya audita descargas, registrar esta también.
+
+### Tests
+- Descarga válida con su nombre de archivo.
+- Archivo inexistente → 404.
+- Sin permiso → 403.
+- Ruta fuera del directorio → 404.
+
+---
+
+## B18. Reordenar posiciones ocupadas en `/test-versions/{id}/configuration`
+
+### Problema
+Las restricciones `UNIQUE` de orden (subtests por versión, ítems por subtest, opciones por ítem) son inmediatas. Un intercambio de posiciones entre registros existentes, por ejemplo A:1↔B:2, falla en `persistDraft*` en cuanto se actualiza el primero. Por eso hoy el builder bloquea esos intercambios y solo ofrece revertir el reordenamiento.
+
+### Cambios (elegir una opción)
+1. **Recomendada:** declarar esas restricciones `DEFERRABLE INITIALLY DEFERRED`. Requiere una migración nueva que haga drop y create de cada constraint. Así la unicidad se valida al commit de la transacción de `/configuration`.
+2. **Alternativa:** dentro de la misma transacción, mover primero a posiciones negativas o temporales los registros cuyo `order` cambia, y después asignar los definitivos.
+3. En ambos casos `validateConfigurationRequest` debe seguir rechazando con 400 los duplicados del estado FINAL.
+
+### Tests
+- Intercambiar dos subtests, dos ítems o dos opciones en un solo request → 200 y orden final correcto.
+- Una rotación de 3 elementos → 200.
+- Un duplicado en el estado final → 400.
+- Un fallo a mitad de la transacción → rollback completo, sin órdenes temporales persistidos.
