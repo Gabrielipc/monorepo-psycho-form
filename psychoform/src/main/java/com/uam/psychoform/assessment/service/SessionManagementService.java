@@ -48,6 +48,12 @@ public class SessionManagementService {
         return sesiones.findAll();
     }
 
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public SesionAplicacion getSession(long sessionId) {
+        return sesiones.findById(sessionId)
+                .orElseThrow(() -> new EntityNotFoundException("Sesion no encontrada: " + sessionId));
+    }
+
     @Transactional
     @PreAuthorize(SecurityPermissions.SESION_CREAR)
     public SesionAplicacion create(CreateSessionCommand command) {

@@ -57,29 +57,37 @@ public class ParticipantAccessService {
     }
 
     @Transactional
-    public ParticipantAccess grantParticipantAccess(long asignacionId, String rawToken) {
+    public GrantedParticipantAccess grantParticipantAccess(long asignacionId, String rawToken) {
         LocalDateTime now = LocalDateTime.now(clock);
         AsignacionTest asignacion = asignaciones.findByIdForUpdate(asignacionId)
                 .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + asignacionId));
 
         if (asignacion.getTokenExpiraEn().isBefore(now)) {
             asignacion.setEstado(EstadoAsignacion.EXPIRADO);
-            throw new IllegalStateException("Token expirado");
+            throw new ParticipantConflictException(ParticipantConflictException.TOKEN_EXPIRADO, "Token expirado");
         }
         if (!tokens.matches(rawToken, asignacion.getTokenAccesoHash())) {
             asignacion.setIntentosAcceso(asignacion.getIntentosAcceso() + 1);
             throw new IllegalArgumentException("Token invalido");
         }
-        if (asignacion.getSesionAplicacion().getEstado() != EstadoSesionAplicacion.ABIERTA) {
-            throw new IllegalStateException("La sesion no esta abierta");
-        }
+        SessionWriteGuard.checkReadable(asignacion.getSesionAplicacion().getEstado());
 
         asignacion.setTokenUsadoEn(now);
-        return new ParticipantAccess(asignacion.getId(), asignacion.getParticipante().getId());
+        return new GrantedParticipantAccess(asignacion.getId(), asignacion.getParticipante().getId(),
+                asignacion.getTokenExpiraEn());
     }
 
     @Transactional
-    public ParticipantAccess validateRuntimeAccess(ParticipantAccess tokenAccess) {
+    public ParticipantAccess validateRuntimeRead(ParticipantAccess tokenAccess) {
+        return validateRuntime(tokenAccess, false);
+    }
+
+    @Transactional
+    public ParticipantAccess validateRuntimeWrite(ParticipantAccess tokenAccess) {
+        return validateRuntime(tokenAccess, true);
+    }
+
+    private ParticipantAccess validateRuntime(ParticipantAccess tokenAccess, boolean write) {
         LocalDateTime now = LocalDateTime.now(clock);
         AsignacionTest asignacion = asignaciones.findByIdForUpdate(tokenAccess.assignmentId())
                 .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + tokenAccess.assignmentId()));
@@ -89,19 +97,26 @@ public class ParticipantAccessService {
         }
         if (asignacion.getTokenExpiraEn().isBefore(now)) {
             asignacion.setEstado(EstadoAsignacion.EXPIRADO);
-            throw new IllegalStateException("Token expirado");
+            throw new ParticipantConflictException(ParticipantConflictException.TOKEN_EXPIRADO, "Token expirado");
         }
-        if (asignacion.getSesionAplicacion().getEstado() != EstadoSesionAplicacion.ABIERTA) {
-            throw new IllegalStateException("La sesion no esta abierta");
+        EstadoSesionAplicacion estadoSesion = asignacion.getSesionAplicacion().getEstado();
+        if (write) {
+            SessionWriteGuard.checkWritable(estadoSesion);
+        } else {
+            SessionWriteGuard.checkReadable(estadoSesion);
         }
         if (asignacion.getEstado() == EstadoAsignacion.ANULADO || asignacion.getEstado() == EstadoAsignacion.EXPIRADO
                 || asignacion.getEstado() == EstadoAsignacion.COMPLETADO) {
-            throw new IllegalStateException("La asignacion no permite operaciones de participante");
+            throw new ParticipantConflictException(ParticipantConflictException.ASIGNACION_NO_OPERABLE,
+                    "La asignacion no permite operaciones de participante");
         }
         return new ParticipantAccess(asignacion.getId(), asignacion.getParticipante().getId());
     }
 
     public record IssuedParticipantToken(Long assignmentId, String rawToken, LocalDateTime expiresAt) {
+    }
+
+    public record GrantedParticipantAccess(Long assignmentId, UUID participantId, LocalDateTime tokenExpiresAt) {
     }
 
     public record ParticipantAccess(Long assignmentId, UUID participantId) {

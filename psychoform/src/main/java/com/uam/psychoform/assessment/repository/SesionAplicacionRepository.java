@@ -14,6 +14,7 @@ public interface SesionAplicacionRepository extends JpaRepository<SesionAplicaci
     @Query("select s from SesionAplicacion s where s.id = :id")
     Optional<SesionAplicacion> findByIdForUpdate(Long id);
 
+
     @Query("""
             select s from SesionAplicacion s
             where lower(s.codigoSesion) like concat('%', lower(:term), '%')

@@ -3,6 +3,9 @@ package com.uam.psychoform;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.uam.psychoform.assessment.model.OpcionSeleccionadaRespuesta;
+import com.uam.psychoform.assessment.model.PausaSesion;
+import com.uam.psychoform.assessment.model.SesionAplicacion;
+import org.hibernate.annotations.Formula;
 import com.uam.psychoform.instrument.model.ReglaCalificacion;
 import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.scoring.model.ResultadoDimension;
@@ -33,5 +36,13 @@ class FullDomainMappingTest {
     void exposesBeanValidationForRequiredBusinessData() throws Exception {
         assertThat(VersionTest.class.getDeclaredField("numeroVersion").getAnnotation(NotBlank.class)).isNotNull();
         assertThat(ReglaCalificacion.class.getDeclaredField("prioridad").getAnnotation(NotNull.class)).isNotNull();
+    }
+
+    @Test
+    void mapsSessionPauseHistory() throws Exception {
+        assertThat(PausaSesion.class.getDeclaredField("sesionAplicacion").getAnnotation(ManyToOne.class)).isNotNull();
+        assertThat(PausaSesion.class.getDeclaredField("pausadoEn").getAnnotation(NotNull.class)).isNotNull();
+        assertThat(PausaSesion.class.getDeclaredField("pausadoPor").getAnnotation(ManyToOne.class)).isNotNull();
+        assertThat(SesionAplicacion.class.getDeclaredField("pausadoEn").getAnnotation(Formula.class)).isNotNull();
     }
 }

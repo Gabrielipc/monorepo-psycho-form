@@ -53,11 +53,14 @@ public class ParticipantRuntimeService {
     private final CurrentActor currentActor;
     private final AuditLogService audit;
     private final Clock clock;
+    private final SessionWriteGuard sessionWriteGuard;
+    private final SubtestClosingService closing;
 
     public ParticipantRuntimeService(SesionAplicacionRepository sesiones, SesionSubtestRepository sesionSubtests,
             AsignacionTestRepository asignaciones, IntentoTestRepository intentos,
             IntentoSubtestRepository intentoSubtests, ParticipanteRepository participantes, UsuarioRepository usuarios,
-            ParticipantTokenService tokenService, CurrentActor currentActor, AuditLogService audit, Clock clock) {
+            ParticipantTokenService tokenService, CurrentActor currentActor, AuditLogService audit, Clock clock,
+            SessionWriteGuard sessionWriteGuard, SubtestClosingService closing) {
         this.sesiones = sesiones;
         this.sesionSubtests = sesionSubtests;
         this.asignaciones = asignaciones;
@@ -69,6 +72,8 @@ public class ParticipantRuntimeService {
         this.currentActor = currentActor;
         this.audit = audit;
         this.clock = clock;
+        this.sessionWriteGuard = sessionWriteGuard;
+        this.closing = closing;
     }
 
     @Transactional
@@ -111,6 +116,9 @@ public class ParticipantRuntimeService {
     @Transactional
     public IntentoTest startOrResumeAttempt(ParticipantAccessService.ParticipantAccess access, String deviceInfo,
             String ipAddress) {
+        AsignacionTest asignacionActual = asignaciones.findById(access.assignmentId())
+                .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + access.assignmentId()));
+        sessionWriteGuard.requireWritable(asignacionActual.getSesionAplicacion().getId());
         return intentos.findByAsignacionId(access.assignmentId())
                 .orElseGet(() -> createAttempt(access.assignmentId(), deviceInfo, ipAddress));
     }
@@ -121,10 +129,11 @@ public class ParticipantRuntimeService {
         IntentoTest intento = intentos.findByIdForUpdate(intentoId)
                 .orElseThrow(() -> new EntityNotFoundException("Intento no encontrado: " + intentoId));
         requireAttemptScope(access, intento);
+        Long sesionId = intento.getAsignacion().getSesionAplicacion().getId();
+        sessionWriteGuard.requireWritable(sesionId);
         if (intento.getEstado() == EstadoIntento.COMPLETADO || intento.getEstado() == EstadoIntento.ANULADO) {
             throw new IllegalStateException("El intento no permite iniciar subtests");
         }
-        Long sesionId = intento.getAsignacion().getSesionAplicacion().getId();
         SesionSubtest sesionSubtest = sesionSubtests.findBySesionAplicacionIdAndSubtestId(sesionId, subtestId)
                 .orElseThrow(() -> new IllegalStateException("Subtest no habilitado en la sesion"));
         return intentoSubtests.findByIntentoIdAndSubtestId(intentoId, subtestId)
@@ -134,16 +143,26 @@ public class ParticipantRuntimeService {
     @Transactional
     public IntentoSubtest finishSubtest(ParticipantAccessService.ParticipantAccess access, long intentoId,
             long subtestId, int tiempoUsadoSegundos) {
+        // Mismo bloqueo que PUT respuesta / bulk-sync (intento FOR UPDATE): serializa finalizar contra un guardado
+        // en curso, de modo que ninguna respuesta se confirme despues de marcar el subtest COMPLETADO.
+        IntentoTest intento = intentos.findByIdForUpdate(intentoId)
+                .orElseThrow(() -> new EntityNotFoundException("Intento no encontrado: " + intentoId));
+        requireAttemptScope(access, intento);
         IntentoSubtest intentoSubtest = intentoSubtests.findByIntentoIdAndSubtestId(intentoId, subtestId)
                 .orElseThrow(() -> new EntityNotFoundException("Intento de subtest no encontrado"));
-        requireAttemptScope(access, intentoSubtest.getIntento());
+        Long sesionId = intento.getAsignacion().getSesionAplicacion().getId();
+        sessionWriteGuard.requireWritable(sesionId);
+        if (intentoSubtest.getEstado() == EstadoIntento.COMPLETADO) {
+            // Idempotente: el subtest pudo cerrarse por tiempo agotado (PUT, bulk-sync o cierre automatico)
+            // antes de que el cliente llamara a finalizar. Se devuelve tal como quedo.
+            return intentoSubtest;
+        }
         if (intentoSubtest.getEstado() != EstadoIntento.EN_PROGRESO) {
             throw new IllegalStateException("El subtest no esta en progreso");
         }
-        intentoSubtest.setEstado(EstadoIntento.COMPLETADO);
-        intentoSubtest.setFinalizadoEn(LocalDateTime.now(clock));
-        intentoSubtest.setTiempoUsadoSegundos(tiempoUsadoSegundos);
-        intentoSubtests.save(intentoSubtest);
+        // El valor del cliente es informativo: el servidor calcula el tiempo efectivo (sin pausas) y registra
+        // respuestas vacias para los items no respondidos.
+        closing.cerrar(intentoSubtest, sesionId, LocalDateTime.now(clock));
         return intentoSubtest;
     }
 
@@ -153,8 +172,15 @@ public class ParticipantRuntimeService {
         IntentoTest intento = intentos.findByIdForUpdate(intentoId)
                 .orElseThrow(() -> new EntityNotFoundException("Intento no encontrado: " + intentoId));
         requireAttemptScope(access, intento);
+        sessionWriteGuard.requireWritable(intento.getAsignacion().getSesionAplicacion().getId());
         if (intento.getEstado() != EstadoIntento.EN_PROGRESO) {
             throw new IllegalStateException("El intento no esta en progreso");
+        }
+        // Los subtests que quedaron en curso se entregan tal como estaban (con respuestas vacias para omitidos).
+        LocalDateTime cierre = LocalDateTime.now(clock);
+        Long sesionDelIntento = intento.getAsignacion().getSesionAplicacion().getId();
+        for (IntentoSubtest enCurso : intentoSubtests.findByIntentoId(intentoId)) {
+            closing.cerrar(enCurso, sesionDelIntento, cierre);
         }
         intento.setEstado(EstadoIntento.COMPLETADO);
         intento.setFinalizadoEn(LocalDateTime.now(clock));

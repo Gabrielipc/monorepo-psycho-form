@@ -33,6 +33,12 @@ public class SessionController {
         return ApiResponse.ok(EntityView.of(management.listSessions()));
     }
 
+    @GetMapping("/{id}")
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public ApiResponse<?> detail(@PathVariable Long id) {
+        return ApiResponse.ok(EntityView.of(management.getSession(id)));
+    }
+
     @PostMapping
     @PreAuthorize(SecurityPermissions.SESION_CREAR)
     public ApiResponse<?> create(@Valid @RequestBody CreateSessionRequest request) {
@@ -45,6 +51,25 @@ public class SessionController {
     @PreAuthorize(SecurityPermissions.SESION_APLICAR)
     public ApiResponse<?> activate(@PathVariable Long id) {
         return ApiResponse.ok(EntityView.of(lifecycle.abrir(id)));
+    }
+
+    @PostMapping("/{id}/pausar")
+    @PreAuthorize(SecurityPermissions.SESION_APLICAR)
+    public ApiResponse<?> pause(@PathVariable Long id,
+            @Valid @RequestBody(required = false) PauseSessionRequest request) {
+        return ApiResponse.ok(EntityView.of(lifecycle.pausar(id, request == null ? null : request.motivo())));
+    }
+
+    @PostMapping("/{id}/reanudar")
+    @PreAuthorize(SecurityPermissions.SESION_APLICAR)
+    public ApiResponse<?> resume(@PathVariable Long id) {
+        return ApiResponse.ok(EntityView.of(lifecycle.reanudar(id)));
+    }
+
+    @GetMapping("/{id}/pausas")
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public ApiResponse<?> pauses(@PathVariable Long id) {
+        return ApiResponse.ok(lifecycle.listarPausas(id));
     }
 
     @PostMapping("/{id}/cerrar")

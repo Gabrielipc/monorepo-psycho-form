@@ -1,5 +1,7 @@
 package com.uam.psychoform.controller;
 
+import com.uam.psychoform.assessment.service.LoteDemasiadoGrandeException;
+import com.uam.psychoform.assessment.service.ParticipantConflictException;
 import com.uam.psychoform.dto.ApiResponse;
 
 import jakarta.persistence.EntityNotFoundException;
@@ -44,6 +46,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("NOT_FOUND", "Recurso no encontrado"));
     }
 
+    @ExceptionHandler(LoteDemasiadoGrandeException.class)
+    ResponseEntity<ApiResponse<Void>> payloadTooLarge(RuntimeException ex) {
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+                .body(ApiResponse.error("PAYLOAD_TOO_LARGE", ex.getMessage()));
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     ResponseEntity<ApiResponse<Void>> badRequest(IllegalArgumentException ex) {
         String message = ex.getMessage() == null ? "Datos invalidos" : ex.getMessage();
@@ -51,6 +59,11 @@ public class GlobalExceptionHandler {
                 : HttpStatus.BAD_REQUEST;
         String code = status == HttpStatus.UNAUTHORIZED ? "UNAUTHORIZED" : "BAD_REQUEST";
         return ResponseEntity.status(status).body(ApiResponse.error(code, message));
+    }
+
+    @ExceptionHandler(ParticipantConflictException.class)
+    ResponseEntity<ApiResponse<Void>> participantConflict(ParticipantConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.error(ex.getCode(), ex.getMessage()));
     }
 
     @ExceptionHandler(IllegalStateException.class)

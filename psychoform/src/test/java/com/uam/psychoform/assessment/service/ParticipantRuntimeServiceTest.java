@@ -23,6 +23,8 @@ import com.uam.psychoform.assessment.model.SesionSubtest;
 import com.uam.psychoform.assessment.repository.AsignacionTestRepository;
 import com.uam.psychoform.assessment.repository.IntentoSubtestRepository;
 import com.uam.psychoform.assessment.repository.IntentoTestRepository;
+import com.uam.psychoform.assessment.repository.PausaSesionRepository;
+import com.uam.psychoform.assessment.model.PausaSesion;
 import com.uam.psychoform.assessment.repository.SesionAplicacionRepository;
 import com.uam.psychoform.assessment.repository.SesionSubtestRepository;
 import com.uam.psychoform.audit.service.AuditLogService;
@@ -40,6 +42,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.security.access.AccessDeniedException;
@@ -58,8 +61,92 @@ class ParticipantRuntimeServiceTest {
     private final ParticipantTokenService tokenService = Mockito.mock(ParticipantTokenService.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final AuditLogService audit = Mockito.mock(AuditLogService.class);
+    private final PausaSesionRepository pausas = Mockito.mock(PausaSesionRepository.class);
+    private final jakarta.persistence.EntityManager entityManager = Mockito.mock(jakarta.persistence.EntityManager.class);
+    private final SessionWriteGuard guard = new SessionWriteGuard(entityManager);
+    private final SubtestTimingService timing = new SubtestTimingService(intentoSubtests, pausas, CLOCK);
+    private final com.uam.psychoform.assessment.repository.RespuestaItemRepository respuestas =
+            Mockito.mock(com.uam.psychoform.assessment.repository.RespuestaItemRepository.class);
+    private final com.uam.psychoform.instrument.repository.ItemLookupRepository items =
+            Mockito.mock(com.uam.psychoform.instrument.repository.ItemLookupRepository.class);
+    private final SubtestClosingService closing = new SubtestClosingService(intentoSubtests, respuestas, items, timing);
     private final ParticipantRuntimeService service = new ParticipantRuntimeService(sesiones, sesionSubtests,
-            asignaciones, intentos, intentoSubtests, participantes, usuarios, tokenService, currentActor, audit, CLOCK);
+            asignaciones, intentos, intentoSubtests, participantes, usuarios, tokenService, currentActor, audit, CLOCK,
+            guard, closing);
+
+    @BeforeEach
+    void abiertaPorDefecto() {
+        when(entityManager.find(SesionAplicacion.class, 10L)).thenReturn(sesion(EstadoSesionAplicacion.ABIERTA));
+        AsignacionTest asignacion = new AsignacionTest();
+        asignacion.setId(99L);
+        asignacion.setSesionAplicacion(sesion(EstadoSesionAplicacion.ABIERTA));
+        when(asignaciones.findById(99L)).thenReturn(Optional.of(asignacion));
+    }
+
+    private void pausar() {
+        when(entityManager.find(SesionAplicacion.class, 10L)).thenReturn(sesion(EstadoSesionAplicacion.PAUSADA));
+    }
+
+    @Test
+    void escriturasDeRuntimeConSesionPausadaLanzanSesionPausada() {
+        pausar();
+        IntentoTest intento = intentoConSesion();
+        intento.getAsignacion().setId(99L);
+        IntentoSubtest intentoSubtest = new IntentoSubtest();
+        intentoSubtest.setEstado(EstadoIntento.EN_PROGRESO);
+        intentoSubtest.setIntento(intento);
+        when(intentos.findByIdForUpdate(5L)).thenReturn(Optional.of(intento));
+        when(intentoSubtests.findByIntentoIdAndSubtestId(5L, 20L)).thenReturn(Optional.of(intentoSubtest));
+
+        assertThatThrownBy(() -> service.startOrResumeAttempt(access(99L), "d", "ip"))
+                .isInstanceOf(SesionPausadaException.class);
+        assertThatThrownBy(() -> service.startSubtest(access(99L), 5L, 20L)).isInstanceOf(SesionPausadaException.class);
+        assertThatThrownBy(() -> service.finishSubtest(access(99L), 5L, 20L, 1))
+                .isInstanceOf(SesionPausadaException.class);
+        assertThatThrownBy(() -> service.finishAttempt(access(99L), 5L, 1)).isInstanceOf(SesionPausadaException.class);
+        assertThat(intentoSubtest.getEstado()).isEqualTo(EstadoIntento.EN_PROGRESO);
+    }
+
+    private IntentoSubtest subtestEnProgreso(long segundosAtras, Integer limite) {
+        IntentoSubtest intentoSubtest = new IntentoSubtest();
+        intentoSubtest.setEstado(EstadoIntento.EN_PROGRESO);
+        intentoSubtest.setIniciadoEn(LocalDateTime.now(CLOCK).minusSeconds(segundosAtras));
+        SesionSubtest sesionSubtest = new SesionSubtest();
+        sesionSubtest.setTiempoLimiteSegundos(limite);
+        intentoSubtest.setSesionSubtest(sesionSubtest);
+        intentoSubtest.setIntento(intentoWithAssignment(99L));
+        when(intentos.findByIdForUpdate(5L)).thenReturn(Optional.of(intentoSubtest.getIntento()));
+        when(intentoSubtests.findByIntentoIdAndSubtestId(5L, 20L)).thenReturn(Optional.of(intentoSubtest));
+        return intentoSubtest;
+    }
+
+    @Test
+    void finishSubtestGuardaMinimoEntreEfectivoYLimiteIgnorandoValorDelCliente() {
+        IntentoSubtest excedido = subtestEnProgreso(700, 600);
+        service.finishSubtest(access(99L), 5L, 20L, 3);
+        assertThat(excedido.getTiempoUsadoSegundos()).isEqualTo(600);
+
+        IntentoSubtest dentro = subtestEnProgreso(300, 600);
+        service.finishSubtest(access(99L), 5L, 20L, 9999);
+        assertThat(dentro.getTiempoUsadoSegundos()).isEqualTo(300);
+
+        IntentoSubtest sinLimite = subtestEnProgreso(900, null);
+        service.finishSubtest(access(99L), 5L, 20L, 1);
+        assertThat(sinLimite.getTiempoUsadoSegundos()).isEqualTo(900);
+    }
+
+    @Test
+    void finishSubtestDescuentaPausasDelTiempoEfectivo() {
+        IntentoSubtest subtest = subtestEnProgreso(500, 600);
+        PausaSesion pausa = new PausaSesion();
+        pausa.setPausadoEn(subtest.getIniciadoEn().plusSeconds(100));
+        pausa.setReanudadoEn(subtest.getIniciadoEn().plusSeconds(400));
+        when(pausas.findBySesionAplicacionIdOrderByPausadoEnAsc(10L)).thenReturn(List.of(pausa));
+
+        service.finishSubtest(access(99L), 5L, 20L, 500);
+
+        assertThat(subtest.getTiempoUsadoSegundos()).isEqualTo(200);
+    }
 
     @Test
     void assignParticipantRequierePermisoSesionAplicar() throws Exception {
@@ -172,13 +259,9 @@ class ParticipantRuntimeServiceTest {
 
     @Test
     void finishSubtestCompletaIntentoSubtestEnProgreso() {
-        IntentoSubtest intentoSubtest = new IntentoSubtest();
-        intentoSubtest.setEstado(EstadoIntento.EN_PROGRESO);
-        when(intentoSubtests.findByIntentoIdAndSubtestId(5L, 20L)).thenReturn(Optional.of(intentoSubtest));
+        IntentoSubtest intentoSubtest = subtestEnProgreso(120, null);
 
-        intentoSubtest.setIntento(intentoWithAssignment(99L));
-
-        IntentoSubtest finished = service.finishSubtest(access(99L), 5L, 20L, 120);
+        IntentoSubtest finished = service.finishSubtest(access(99L), 5L, 20L, 5);
 
         assertThat(finished.getEstado()).isEqualTo(EstadoIntento.COMPLETADO);
         assertThat(finished.getTiempoUsadoSegundos()).isEqualTo(120);
@@ -274,6 +357,7 @@ class ParticipantRuntimeServiceTest {
     private static IntentoTest intentoWithAssignment(long assignmentId) {
         AsignacionTest asignacion = new AsignacionTest();
         asignacion.setId(assignmentId);
+        asignacion.setSesionAplicacion(sesion(EstadoSesionAplicacion.ABIERTA));
         IntentoTest intento = new IntentoTest();
         intento.setAsignacion(asignacion);
         return intento;
@@ -304,5 +388,150 @@ class ParticipantRuntimeServiceTest {
         intento.setEstado(EstadoIntento.EN_PROGRESO);
         intento.setAsignacion(asignacion);
         return intento;
+    }
+
+    @Test
+    void finishSubtestBloqueaElIntentoAntesDeLeerElSubtest() {
+        subtestEnProgreso(120, null);
+
+        service.finishSubtest(access(99L), 5L, 20L, 0);
+
+        org.mockito.InOrder orden = Mockito.inOrder(intentos, intentoSubtests);
+        orden.verify(intentos).findByIdForUpdate(5L);
+        orden.verify(intentoSubtests).findByIntentoIdAndSubtestId(5L, 20L);
+    }
+
+    // ---- Entrega del subtest "tal como estaba" ----
+
+    private IntentoSubtest subtestConItems(long segundosAtras, Integer limite) {
+        IntentoSubtest intentoSubtest = subtestEnProgreso(segundosAtras, limite);
+        intentoSubtest.getIntento().setId(5L);
+        intentoSubtest.getIntento().setEstado(EstadoIntento.EN_PROGRESO);
+        com.uam.psychoform.instrument.model.Subtest subtest = new com.uam.psychoform.instrument.model.Subtest();
+        subtest.setId(20L);
+        intentoSubtest.setSubtest(subtest);
+        com.uam.psychoform.instrument.model.Item respondido = new com.uam.psychoform.instrument.model.Item();
+        respondido.setId(100L);
+        com.uam.psychoform.instrument.model.Item omitido = new com.uam.psychoform.instrument.model.Item();
+        omitido.setId(101L);
+        when(items.findBySubtestIdAndEstadoOrderByNumeroOrdenAsc(20L,
+                com.uam.psychoform.security.model.EstadoGeneral.ACTIVO)).thenReturn(List.of(respondido, omitido));
+        com.uam.psychoform.assessment.model.RespuestaItem previa = new com.uam.psychoform.assessment.model.RespuestaItem();
+        previa.setItem(respondido);
+        when(respuestas.findByIntentoId(5L)).thenReturn(List.of(previa));
+        return intentoSubtest;
+    }
+
+    private List<com.uam.psychoform.assessment.model.RespuestaItem> vaciasGuardadas() {
+        org.mockito.ArgumentCaptor<com.uam.psychoform.assessment.model.RespuestaItem> captor =
+                org.mockito.ArgumentCaptor.forClass(com.uam.psychoform.assessment.model.RespuestaItem.class);
+        verify(respuestas, Mockito.atLeast(0)).save(captor.capture());
+        return captor.getAllValues();
+    }
+
+    @Test
+    void finishSubtestRegistraRespuestasVaciasParaLosItemsOmitidos() {
+        IntentoSubtest intentoSubtest = subtestConItems(120, 600);
+
+        service.finishSubtest(access(99L), 5L, 20L, 0);
+
+        assertThat(intentoSubtest.getEstado()).isEqualTo(EstadoIntento.COMPLETADO);
+        List<com.uam.psychoform.assessment.model.RespuestaItem> vacias = vaciasGuardadas();
+        assertThat(vacias).hasSize(1);
+        assertThat(vacias.get(0).getItem().getId()).isEqualTo(101L);
+        assertThat(vacias.get(0).getIntentoSubtest()).isSameAs(intentoSubtest);
+        assertThat(vacias.get(0).getEsFinal()).isTrue();
+    }
+
+    @Test
+    void finishSubtestEsIdempotenteSiElSubtestYaSeCerroPorTiempo() {
+        IntentoSubtest intentoSubtest = subtestConItems(700, 600);
+        intentoSubtest.setEstado(EstadoIntento.COMPLETADO);
+        intentoSubtest.setTiempoUsadoSegundos(600);
+
+        IntentoSubtest result = service.finishSubtest(access(99L), 5L, 20L, 0);
+
+        assertThat(result).isSameAs(intentoSubtest);
+        assertThat(result.getTiempoUsadoSegundos()).isEqualTo(600);
+        verify(intentoSubtests, Mockito.never()).save(Mockito.any());
+        verify(respuestas, Mockito.never()).save(Mockito.any());
+    }
+
+    @Test
+    void finishAttemptEntregaLosSubtestsQueSiguenEnCurso() {
+        IntentoSubtest enCurso = subtestConItems(120, 600);
+        IntentoTest intento = enCurso.getIntento();
+        intento.getAsignacion().setEstado(com.uam.psychoform.assessment.model.EstadoAsignacion.EN_PROGRESO);
+        when(intentoSubtests.findByIntentoId(5L)).thenReturn(List.of(enCurso));
+
+        service.finishAttempt(access(99L), 5L, 0);
+
+        assertThat(intento.getEstado()).isEqualTo(EstadoIntento.COMPLETADO);
+        assertThat(enCurso.getEstado()).isEqualTo(EstadoIntento.COMPLETADO);
+        assertThat(vaciasGuardadas()).extracting(r -> r.getItem().getId()).containsExactly(101L);
+    }
+
+    @Test
+    void cierreAutomaticoEntregaSubtestsVencidosYRespetaLosQueTienenTiempo() {
+        IntentoSubtest vencido = subtestConItems(606, 600);
+        IntentoSubtestRepository.CierreCandidato candidato = new IntentoSubtestRepository.CierreCandidato() {
+            public Long getIntentoId() { return 5L; }
+            public Long getIntentoSubtestId() { return 1L; }
+        };
+        when(intentoSubtests.findCandidatosCierrePorTiempo()).thenReturn(List.of(candidato));
+        when(intentoSubtests.findById(1L)).thenReturn(Optional.of(vencido));
+        org.springframework.transaction.PlatformTransactionManager txManager =
+                Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+        ExpiredSubtestCloser closer = new ExpiredSubtestCloser(intentoSubtests, intentos, closing, txManager, CLOCK, entityManager);
+
+        assertThat(closer.cerrarExpirados()).isEqualTo(1);
+        assertThat(vencido.getEstado()).isEqualTo(EstadoIntento.COMPLETADO);
+        assertThat(vencido.getTiempoUsadoSegundos()).isEqualTo(600);
+        assertThat(vaciasGuardadas()).extracting(r -> r.getItem().getId()).containsExactly(101L);
+
+        // Dentro de limite + gracia (605 s) no se cierra.
+        IntentoSubtest conTiempo = subtestConItems(605, 600);
+        when(intentoSubtests.findById(1L)).thenReturn(Optional.of(conTiempo));
+        assertThat(closer.cerrarExpirados()).isZero();
+        assertThat(conTiempo.getEstado()).isEqualTo(EstadoIntento.EN_PROGRESO);
+    }
+
+    @Test
+    void cierreAutomaticoDescuentaPausas() {
+        IntentoSubtest pausado = subtestConItems(900, 600);
+        PausaSesion pausa = new PausaSesion();
+        pausa.setPausadoEn(pausado.getIniciadoEn().plusSeconds(100));
+        pausa.setReanudadoEn(null); // pausa todavia abierta: 100 s efectivos
+        when(pausas.findBySesionAplicacionIdOrderByPausadoEnAsc(10L)).thenReturn(List.of(pausa));
+        IntentoSubtestRepository.CierreCandidato candidato = new IntentoSubtestRepository.CierreCandidato() {
+            public Long getIntentoId() { return 5L; }
+            public Long getIntentoSubtestId() { return 1L; }
+        };
+        when(intentoSubtests.findCandidatosCierrePorTiempo()).thenReturn(List.of(candidato));
+        when(intentoSubtests.findById(1L)).thenReturn(Optional.of(pausado));
+        ExpiredSubtestCloser closer = new ExpiredSubtestCloser(intentoSubtests, intentos, closing,
+                Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class), CLOCK, entityManager);
+
+        assertThat(closer.cerrarExpirados()).isZero();
+        assertThat(pausado.getEstado()).isEqualTo(EstadoIntento.EN_PROGRESO);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = EstadoSesionAplicacion.class, names = { "CERRADA", "CANCELADA" })
+    void cierreAutomaticoIgnoraSesionesTerminadas(EstadoSesionAplicacion terminal) {
+        IntentoSubtest vencido = subtestConItems(900, 600);
+        when(entityManager.find(SesionAplicacion.class, 10L)).thenReturn(sesion(terminal));
+        IntentoSubtestRepository.CierreCandidato candidato = new IntentoSubtestRepository.CierreCandidato() {
+            public Long getIntentoId() { return 5L; }
+            public Long getIntentoSubtestId() { return 1L; }
+        };
+        when(intentoSubtests.findCandidatosCierrePorTiempo()).thenReturn(List.of(candidato));
+        when(intentoSubtests.findById(1L)).thenReturn(Optional.of(vencido));
+        ExpiredSubtestCloser closer = new ExpiredSubtestCloser(intentoSubtests, intentos, closing,
+                Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class), CLOCK, entityManager);
+
+        assertThat(closer.cerrarExpirados()).isZero();
+        assertThat(vencido.getEstado()).isEqualTo(EstadoIntento.EN_PROGRESO);
+        verify(respuestas, Mockito.never()).save(Mockito.any());
     }
 }
