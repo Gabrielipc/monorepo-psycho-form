@@ -69,7 +69,7 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-5)", () => {
     ).toBe(true);
   });
 
-  it("Hallazgo 2 (MEDIO): imagen pendiente con error incierto se adopta si aparece en el mismo slot en theirs", () => {
+  it("Hallazgo 2 (MEDIO) / F3-FIX-8 (ALTO 1): imagen pendiente con error incierto no se adopta automáticamente aunque coincida nombre, altText y role; abre UNCERTAIN_IMAGE_OPERATION y conserva File y sent", () => {
     const base = createCleanDocument({ baremos: [] });
     const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(120));
 
@@ -116,23 +116,52 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-5)", () => {
       itemDraftId: "item-30",
       optionDraftId: null,
       order: 2,
+      pendingFileId: "file-2",
       fileName: "dos.png",
+      fileSize: 3,
+      lastModified: 1000,
       altText: "Estímulo 2",
       role: "ENUNCIADO",
     };
 
-    const result = reconcileVersionDocumentThreeWay({ base, mine, theirs, sent });
-    expect(result.conflicts).toEqual([]);
-    const reconciledImg = result.document.subtests[0]!.items[0]!.images.find(
+    const result = reconcileVersionDocumentThreeWay({
+      base,
+      mine,
+      theirs,
+      sent,
+      pendingFiles: {
+        "file-2": new File(["img"], "dos.png", { type: "image/png", lastModified: 1000 }),
+      },
+    });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.resolution?.intention).toBe("reupload");
+    const pendingImg = result.document.subtests[0]!.items[0]!.images.find(
       (img) => img.order === 2,
     );
-    expect(reconciledImg).toMatchObject({
+    expect(pendingImg).toMatchObject({
+      id: null,
+      resourceId: null,
+      pendingFileId: "file-2",
+      status: "CREATED",
+    });
+    expect(result.sent.uploads[slotKey]).toBeDefined();
+
+    const kept = resolveUncertainImageConflict({
+      document: mine,
+      baseline: base,
+      sent,
+      resolution: result.conflicts[0]!.resolution!,
+      choice: "keep_server",
+    });
+    expect(kept.stale).toBe(false);
+    expect(kept.document.subtests[0]!.items[0]!.images.find((img) => img.order === 2)).toMatchObject({
       id: 777,
       resourceId: 901,
       pendingFileId: null,
       status: "EXISTING",
     });
-    expect(result.sent.uploads[slotKey]).toBeUndefined();
+    expect(kept.sent.uploads[slotKey]).toBeUndefined();
   });
 
   it("Hallazgo 3 (MEDIO): editar baremo tras guardado parcial cuyo primer envío sí aplicó deja la diferencia como UPDATED sin 409", () => {
@@ -738,8 +767,8 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
   });
 });
 
-describe("sanitizeImageFilename y extractSanitizedFilenameFromStoragePath (F3-FIX-7b)", () => {
-  it("replica exactamente el saneamiento de InstrumentImageService.java (~346-361)", () => {
+describe("sanitizeImageFilename y extractSanitizedFilenameFromStoragePath (F3-FIX-7b / F3-FIX-8)", () => {
+  it("replica exactamente el saneamiento por punto de código de InstrumentImageService.java (~346-361)", () => {
     expect(sanitizeImageFilename(null)).toBe("image");
     expect(sanitizeImageFilename(undefined)).toBe("image");
     expect(sanitizeImageFilename("")).toBe("image");
@@ -749,6 +778,11 @@ describe("sanitizeImageFilename y extractSanitizedFilenameFromStoragePath (F3-FI
       "mi_foto__1__2x.png",
     );
     expect(sanitizeImageFilename("carpeta/sub/árbol-ñ#.jpg")).toBe("_rbol-__.jpg");
+    // Java Pattern.replaceAll opera por punto de código Unicode, no por unidad UTF-16
+    expect(sanitizeImageFilename("estímulo😀.png")).toBe("est_mulo_.png");
+    expect(sanitizeImageFilename("a👨‍👩‍👧b.png")).toBe("a_____b.png");
+    const longName = `${"a".repeat(300)}.png`;
+    expect(sanitizeImageFilename(longName)).toBe(longName);
   });
 
   it("extrae el nombre saneado tras {uuid}- y devuelve null cuando storagePath no es parseable", () => {
@@ -1147,5 +1181,276 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-7b)", () => {
     expect(editedMetaRes.conflicts).toHaveLength(1);
     expect(editedMetaRes.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
     expect(editedMetaRes.conflicts[0]?.resolution?.intention).toBe("reupload");
+  });
+
+  it("F3-FIX-8 (ALTO 1 - PUT): PUT incierto con coincidencia exacta de nombre, altText y role abre UNCERTAIN_IMAGE_OPERATION y conserva File y sent", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1440));
+    const file = new File(["new"], "estimulo.png", { type: "image/png", lastModified: 1234 });
+
+    const mine = reducer(base, {
+      type: "UPDATE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+      patch: {
+        resourceId: null,
+        pendingFileId: "f-put",
+        fileName: "estimulo.png",
+        altText: "Figura estímulo",
+        role: "ENUNCIADO",
+      },
+    });
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 1,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 1,
+      pendingFileId: "f-put",
+      fileName: "estimulo.png",
+      fileSize: file.size,
+      lastModified: file.lastModified,
+      altText: "Figura estímulo",
+      role: "ENUNCIADO",
+    };
+
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images[0] = {
+      ...theirs.subtests[0]!.items[0]!.images[0]!,
+      resourceId: 950,
+      previewUrl: "/items/images/resources/950",
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-estimulo.png",
+    };
+
+    const result = reconcileVersionDocumentThreeWay({
+      base,
+      mine,
+      theirs,
+      sent,
+      pendingFiles: { "f-put": file },
+    });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.resolution?.intention).toBe("reupload");
+    expect(result.document.subtests[0]!.items[0]!.images[0]).toMatchObject({
+      resourceId: null,
+      pendingFileId: "f-put",
+    });
+    expect(result.sent.uploads[slotKey]).toBeDefined();
+  });
+
+  it("F3-FIX-8 (ALTO 2): resolución antigua queda obsoleta si se adjunta otro archivo en la posición libre y no reemplaza al nuevo", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1450));
+
+    // POST incierto seguido de borrado local -> conflicto con localImage === null en order=2
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: "f-old",
+      fileName: "vieja.png",
+    };
+
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images.push({
+      id: 777,
+      draftId: "img-777",
+      sourceId: null,
+      resourceId: 901,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/901",
+      status: "EXISTING",
+      order: 2,
+      altText: "Vieja",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-vieja.png",
+    });
+
+    const initial = reconcileVersionDocumentThreeWay({ base, mine: base, theirs, sent });
+    expect(initial.conflicts).toHaveLength(1);
+    const oldResolution = initial.conflicts[0]!.resolution!;
+    expect(oldResolution.origin.localImage).toBeNull();
+    expect(oldResolution.origin.remoteResourceId).toBe(901);
+
+    // Después de aparecer el conflicto, el editor adjunta un archivo nuevo en la posición libre (#2)
+    const afterAttach = reducer(base, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-new-b",
+        pendingFileId: "f-new-b",
+        order: 2,
+        altText: "Nueva B",
+        role: "ENUNCIADO",
+        fileName: "nueva-b.png",
+      },
+    });
+
+    const resolved = resolveUncertainImageConflict({
+      document: afterAttach,
+      baseline: base,
+      sent,
+      resolution: oldResolution,
+      choice: "keep_server",
+    });
+
+    expect(resolved.stale).toBe(true);
+    expect(resolved.document).toBe(afterAttach);
+    expect(resolved.document.subtests[0]!.items[0]!.images.find((img) => img.order === 2)).toMatchObject({
+      draftId: "img-new-b",
+      pendingFileId: "f-new-b",
+      status: "CREATED",
+    });
+    expect(resolved.sent.uploads[slotKey]).toBeDefined();
+  });
+
+  it("F3-FIX-8 (MEDIO 1): POST aplicado con nombre no ASCII (estímulo😀.png) abre UNCERTAIN_IMAGE_OPERATION, nunca «ajena»", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1460));
+    const mine = reducer(base, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-emoji",
+        pendingFileId: "f-emoji",
+        order: 2,
+        altText: "Estímulo emoji",
+        role: "ENUNCIADO",
+        fileName: "estímulo😀.png",
+      },
+    });
+
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: "f-emoji",
+      fileName: "estímulo😀.png",
+      altText: "Estímulo emoji",
+      role: "ENUNCIADO",
+    };
+
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images.push({
+      id: 888,
+      draftId: "img-888",
+      sourceId: null,
+      resourceId: 910,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/910",
+      status: "EXISTING",
+      order: 2,
+      altText: "Estímulo emoji",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-est_mulo_.png",
+    });
+
+    const result = reconcileVersionDocumentThreeWay({
+      base,
+      mine,
+      theirs,
+      sent,
+      pendingFiles: { "f-emoji": new File(["x"], "estímulo😀.png", { type: "image/png" }) },
+    });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.reason).not.toMatch(/ajena|Otro usuario/i);
+
+    // Incluso si el almacenamiento normalizara distinto un nombre no ASCII, Regla 1 no lo descarta
+    const theirsDifferentNormalization = structuredClone(theirs);
+    theirsDifferentNormalization.subtests[0]!.items[0]!.images[1]!.storagePath =
+      "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-estimulo.png";
+    const nonAsciiAmbiguous = reconcileVersionDocumentThreeWay({
+      base,
+      mine,
+      theirs: theirsDifferentNormalization,
+      sent,
+      pendingFiles: { "f-emoji": new File(["x"], "estímulo😀.png", { type: "image/png" }) },
+    });
+    expect(nonAsciiAmbiguous.conflicts).toHaveLength(1);
+    expect(nonAsciiAmbiguous.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+  });
+
+  it("F3-FIX-8 (MEDIO 1): PUT aplicado con nombre no ASCII seguido de borrado local abre UNCERTAIN_IMAGE_OPERATION", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1470));
+
+    let mine = reducer(base, {
+      type: "UPDATE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+      patch: {
+        resourceId: null,
+        pendingFileId: "f-emoji",
+        fileName: "estímulo😀.png",
+      },
+    });
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 1,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 1,
+      pendingFileId: "f-emoji",
+      fileName: "estímulo😀.png",
+      altText: "Figura estímulo",
+      role: "ENUNCIADO",
+    };
+
+    mine = reducer(mine, {
+      type: "DELETE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+    });
+
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images[0] = {
+      ...theirs.subtests[0]!.items[0]!.images[0]!,
+      resourceId: 995,
+      previewUrl: "/items/images/resources/995",
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-est_mulo_.png",
+    };
+
+    const result = reconcileVersionDocumentThreeWay({ base, mine, theirs, sent });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.resolution?.intention).toBe("delete");
+    expect(result.conflicts[0]?.reason).not.toMatch(/modificada externamente/i);
   });
 });

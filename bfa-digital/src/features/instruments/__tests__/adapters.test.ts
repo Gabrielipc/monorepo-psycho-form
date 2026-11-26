@@ -1756,7 +1756,7 @@ describe("saveVersionDocument", () => {
     expect(writes).toBe(0);
   });
 
-  it("F3-FIX-5 (Hallazgo 2 - MEDIO): imagen subida al servidor + 503 + recarga 503 adopta la imagen al reintentar sin 409 ni re-subida", async () => {
+  it("F3-FIX-5 / F3-FIX-8 (ALTO 1): imagen subida al servidor + 503 + recarga 503 abre UNCERTAIN_IMAGE_OPERATION sin auto-adopción y conserva File y sent hasta resolver", async () => {
     let uploadCalls = 0;
     let persistedExtraImage: {
       sourceImageId: number;
@@ -1848,13 +1848,39 @@ describe("saveVersionDocument", () => {
     expect(uploadCalls).toBe(1);
 
     failReload = false;
-    const retried = await saveVersionDocument({
+    const conflictErr = await saveVersionDocument({
       document: partial.document,
       pendingFiles: files,
       baselineDocument: partial.baselineDocument ?? undefined,
       baselineSignature: partial.baselineSignature,
       reconciliationPending: partial.reconciliationPending,
       sent: partial.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e);
+
+    expect(uploadCalls).toBe(1);
+    expect(conflictErr).toBeInstanceOf(VersionConflictError);
+    const vErr = conflictErr as VersionConflictError;
+    expect(vErr.conflicts).toHaveLength(1);
+    expect(vErr.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(vErr.conflicts[0]?.resolution?.intention).toBe("reupload");
+
+    const resolved = resolveUncertainImageConflict({
+      document: partial.document,
+      baseline: partial.baselineDocument,
+      sent: partial.sent,
+      resolution: vErr.conflicts[0]!.resolution!,
+      choice: "keep_server",
+    });
+    const retried = await saveVersionDocument({
+      document: resolved.document,
+      pendingFiles: files,
+      baselineDocument: resolved.baseline ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: resolved.sent,
       completedSteps: partial.completedSteps,
       pendingSteps: partial.pendingSteps,
       permissions: fullPermissions,

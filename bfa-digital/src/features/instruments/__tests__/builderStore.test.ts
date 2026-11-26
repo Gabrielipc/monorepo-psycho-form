@@ -7,7 +7,8 @@ import {
   MAX_HISTORY,
   useBuilderStore,
 } from "../builderStore";
-import { canonicalBaremo, createEmptySentSnapshot, sentKey } from "../document/sent";
+import { reconcileVersionDocumentThreeWay } from "../document/reconcile";
+import { canonicalBaremo, createEmptySentSnapshot, sentKey, uploadSlotKey } from "../document/sent";
 import { createCleanDocument } from "../document/__tests__/fixtures";
 
 describe("builderStore", () => {
@@ -352,5 +353,139 @@ describe("builderStore", () => {
       sent.nodes[sentKey.baremo("bar-new")],
     );
     expect(restored.document?.baremos[0]?.name).toBe("Nombre editado");
+  });
+
+  it("F3-FIX-8 (ALTO 2): resolveUncertainImageConflict en el store rechaza resolución obsoleta, pide resincronizar y nunca retira un File distinto al del snapshot", () => {
+    const serverDoc = createCleanDocument({ baremos: [] });
+    useBuilderStore.getState().initDocument(serverDoc);
+
+    const oldFile = new File(["old"], "vieja.png", { type: "image/png" });
+    const oldPending = useBuilderStore.getState().registerPendingFile(oldFile);
+
+    useBuilderStore.getState().dispatch({
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-old",
+        pendingFileId: oldPending.pendingFileId,
+        previewUrl: oldPending.previewUrl,
+        order: 2,
+        fileName: "vieja.png",
+        altText: "Vieja",
+        role: "ENUNCIADO",
+      },
+    });
+
+    // POST incierto falla con 503 y el usuario elimina la imagen local antes de reconciliar
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: oldPending.pendingFileId,
+      fileName: "vieja.png",
+      altText: "Vieja",
+      role: "ENUNCIADO",
+    };
+
+    useBuilderStore.getState().dispatch({
+      type: "DELETE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-old",
+    });
+
+    const theirs = structuredClone(serverDoc);
+    theirs.subtests[0]!.items[0]!.images.push({
+      id: 88,
+      draftId: "img-88",
+      sourceId: null,
+      resourceId: 905,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/905",
+      status: "EXISTING",
+      order: 2,
+      altText: "Vieja",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-vieja.png",
+    });
+
+    useBuilderStore.getState().reconcilePartialSave(
+      useBuilderStore.getState().document!,
+      serverDoc,
+      undefined,
+      { reconciliationPending: false, sent },
+    );
+
+    const reconcileRes = reconcileVersionDocumentThreeWay({
+      base: serverDoc,
+      mine: useBuilderStore.getState().document!,
+      theirs,
+      sent,
+    });
+    expect(reconcileRes.conflicts).toHaveLength(1);
+    const oldResolution = reconcileRes.conflicts[0]!.resolution!;
+
+    // El usuario adjunta un nuevo archivo en la posición libre (#2) después de detectarse el conflicto
+    const newFile = new File(["new"], "nueva.png", { type: "image/png" });
+    const newPending = useBuilderStore.getState().registerPendingFile(newFile);
+    useBuilderStore.getState().dispatch({
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-new",
+        pendingFileId: newPending.pendingFileId,
+        previewUrl: newPending.previewUrl,
+        order: 2,
+        fileName: "nueva.png",
+        altText: "Nueva",
+        role: "ENUNCIADO",
+      },
+    });
+
+    const staleOutcome = useBuilderStore
+      .getState()
+      .resolveUncertainImageConflict(oldResolution, "keep_server");
+
+    expect(staleOutcome.stale).toBe(true);
+    expect(staleOutcome.applied).toBe(false);
+    const stateAfterStale = useBuilderStore.getState();
+    expect(stateAfterStale.reconciliationPending).toBe(true);
+    expect(stateAfterStale.partialSave?.reconciliationPending).toBe(true);
+    expect(stateAfterStale.getPendingFilesMap()[newPending.pendingFileId]).toBe(newFile);
+    expect(stateAfterStale.document?.subtests[0]?.items[0]?.images.find((i) => i.order === 2)).toMatchObject({
+      draftId: "img-new",
+      pendingFileId: newPending.pendingFileId,
+      status: "CREATED",
+    });
+
+    // Ahora probar que al resolver un conflicto vigente de img-new (keep_server) solo se retira el File del snapshot
+    const otherFile = new File(["other"], "otro.png", { type: "image/png" });
+    const otherPending = useBuilderStore.getState().registerPendingFile(otherFile);
+    const freshReconcile = reconcileVersionDocumentThreeWay({
+      base: serverDoc,
+      mine: useBuilderStore.getState().document!,
+      theirs,
+      sent,
+      pendingFiles: useBuilderStore.getState().getPendingFilesMap(),
+    });
+    const freshOutcome = useBuilderStore
+      .getState()
+      .resolveUncertainImageConflict(freshReconcile.conflicts[0]!.resolution!, "keep_server");
+
+    expect(freshOutcome.stale).toBe(false);
+    expect(freshOutcome.applied).toBe(true);
+    expect(useBuilderStore.getState().getPendingFilesMap()[newPending.pendingFileId]).toBeUndefined();
+    expect(useBuilderStore.getState().getPendingFilesMap()[otherPending.pendingFileId]).toBe(otherFile);
   });
 });

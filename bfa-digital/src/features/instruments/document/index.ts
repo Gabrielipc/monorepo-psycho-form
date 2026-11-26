@@ -33,8 +33,11 @@ export {
   sanitizeImageFilename,
   type DocumentConflictKind,
   type DocumentConflictNode,
+  type ResolveUncertainImageConflictResult,
   type ThreeWayReconcileResult,
   type UncertainImageIntention,
+  type UncertainImageLocalSnapshot,
+  type UncertainImageOriginSnapshot,
   type UncertainImageResolutionChoice,
   type UncertainImageResolutionContext,
 } from "./reconcile";

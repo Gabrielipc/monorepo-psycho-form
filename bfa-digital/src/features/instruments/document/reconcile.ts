@@ -25,6 +25,7 @@ import {
 import {
   isActiveDraftNode,
   nodeKeyOf,
+  type DraftStatus,
   type DocumentAnswerKey,
   type DocumentBaremo,
   type DocumentBaremoRange,
@@ -53,6 +54,21 @@ export type UncertainImageIntention = "delete" | "replace" | "reupload";
 
 export type UncertainImageResolutionChoice = "keep_server" | "apply_mine";
 
+export interface UncertainImageLocalSnapshot {
+  draftId: string;
+  id: number | null;
+  pendingFileId: string | null;
+  status: DraftStatus;
+}
+
+export interface UncertainImageOriginSnapshot {
+  remoteResourceId: number | null;
+  uploadKey: string;
+  sentPendingFileId: string | null;
+  /** Huella de la imagen local al crear el conflicto (`null` si el slot estaba vacío). */
+  localImage: UncertainImageLocalSnapshot | null;
+}
+
 export interface UncertainImageResolutionContext {
   ownerKind: "item" | "option";
   subtestDraftId: string;
@@ -63,6 +79,7 @@ export interface UncertainImageResolutionContext {
   intention: UncertainImageIntention;
   serverImage: DocumentImage;
   localImageDraftId?: string;
+  origin: UncertainImageOriginSnapshot;
 }
 
 export interface DocumentConflictNode {
@@ -72,6 +89,7 @@ export interface DocumentConflictNode {
   label: string;
   reason: string;
   resolution?: UncertainImageResolutionContext;
+  stale?: boolean;
 }
 
 export interface ThreeWayReconcileResult {
@@ -522,6 +540,7 @@ function deletedByOtherReason(noun: string, localEdits: string[]): string {
 
 const STORAGE_UUID_FILENAME_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(.+)$/i;
+const PRINTABLE_ASCII_PATTERN = /^[\u0020-\u007E]+$/;
 
 function originalFilename(filename: string | null | undefined): string {
   if (!filename || filename.trim() === "") {
@@ -534,10 +553,11 @@ function originalFilename(filename: string | null | undefined): string {
 
 /**
  * Replica exactamente el saneamiento de nombres de archivo del backend
- * (`InstrumentImageService.java` ~346-361).
+ * (`InstrumentImageService.java` ~346-361). El flag `/u` empareja por punto
+ * de código Unicode al igual que `java.util.regex.Pattern` en `String.replaceAll`.
  */
 export function sanitizeImageFilename(filename: string | null | undefined): string {
-  return originalFilename(filename).replace(/[^A-Za-z0-9._-]/g, "_");
+  return originalFilename(filename).replace(/[^A-Za-z0-9._-]/gu, "_");
 }
 
 /**
@@ -562,7 +582,11 @@ function classifyUncertainUpload(
   sentUpload: SentUploadRecord,
 ): UncertainUploadMatch {
   const remoteSanitized = extractSanitizedFilenameFromStoragePath(theirs.storagePath);
-  if (remoteSanitized === null || sentUpload.fileName == null) {
+  if (
+    remoteSanitized === null ||
+    sentUpload.fileName == null ||
+    !PRINTABLE_ASCII_PATTERN.test(sentUpload.fileName)
+  ) {
     return "ambiguous";
   }
   const sentSanitized = sanitizeImageFilename(sentUpload.fileName);
@@ -589,9 +613,10 @@ function pushUncertainImageConflict(params: {
   itemDraftId: string;
   optionDraftId: string | null;
   uploadKey: string;
+  sentUpload: SentUploadRecord;
   intention: UncertainImageIntention;
   serverImage: DocumentImage;
-  localImageDraftId?: string;
+  localImage?: DocumentImage;
 }): void {
   const {
     ctx,
@@ -602,10 +627,24 @@ function pushUncertainImageConflict(params: {
     itemDraftId,
     optionDraftId,
     uploadKey,
+    sentUpload,
     intention,
     serverImage,
-    localImageDraftId,
+    localImage,
   } = params;
+  const origin: UncertainImageOriginSnapshot = {
+    remoteResourceId: serverImage.resourceId,
+    uploadKey,
+    sentPendingFileId: sentUpload.pendingFileId ?? null,
+    localImage: localImage
+      ? {
+          draftId: localImage.draftId,
+          id: localImage.id,
+          pendingFileId: localImage.pendingFileId,
+          status: localImage.status,
+        }
+      : null,
+  };
   pushConflict(ctx, {
     kind: "UNCERTAIN_IMAGE_OPERATION",
     node: itemNode,
@@ -620,7 +659,8 @@ function pushUncertainImageConflict(params: {
       uploadKey,
       intention,
       serverImage: structuredClone(serverImage),
-      ...(localImageDraftId !== undefined ? { localImageDraftId } : {}),
+      ...(localImage !== undefined ? { localImageDraftId: localImage.draftId } : {}),
+      origin,
     },
   });
 }
@@ -643,8 +683,7 @@ function resolveImageListForChoice(
     for (const img of images) {
       const matchesTarget =
         (localImageDraftId !== undefined && img.draftId === localImageDraftId) ||
-        (serverImage.id !== null && img.id === serverImage.id) ||
-        (isActiveDraftNode(img) && img.order === serverImage.order);
+        (serverImage.id !== null && img.id === serverImage.id);
       if (matchesTarget) {
         if (!inserted) {
           next.push(kept);
@@ -738,9 +777,113 @@ function upsertBaselineImageList(
   return next;
 }
 
+export interface ResolveUncertainImageConflictResult {
+  stale: boolean;
+  staleReason?: string;
+  document: VersionDocument;
+  baseline: VersionDocument | null;
+  sent: SentSnapshot;
+}
+
+function findOwnerImages(
+  document: VersionDocument,
+  resolution: Pick<
+    UncertainImageResolutionContext,
+    "ownerKind" | "subtestDraftId" | "itemDraftId" | "optionDraftId"
+  >,
+): readonly DocumentImage[] | null {
+  const sub = document.subtests.find(
+    (s) => s.draftId === resolution.subtestDraftId && isActiveDraftNode(s),
+  );
+  if (!sub) return null;
+  const item = sub.items.find(
+    (i) => i.draftId === resolution.itemDraftId && isActiveDraftNode(i),
+  );
+  if (!item) return null;
+  if (resolution.ownerKind === "item") {
+    return item.images;
+  }
+  const opt =
+    resolution.optionDraftId !== null
+      ? item.options.find(
+          (o) => o.draftId === resolution.optionDraftId && isActiveDraftNode(o),
+        )
+      : undefined;
+  return opt ? opt.images : null;
+}
+
+function getStaleUncertainImageReason(params: {
+  document: VersionDocument;
+  sent: SentSnapshot;
+  resolution: UncertainImageResolutionContext;
+}): string | null {
+  const { document, sent, resolution } = params;
+  const { origin, order, serverImage } = resolution;
+
+  if (origin.remoteResourceId !== serverImage.resourceId) {
+    return "El recurso remoto del conflicto ya no coincide con el snapshot original.";
+  }
+
+  const currentSentUpload = sent.uploads[origin.uploadKey];
+  if (
+    currentSentUpload === undefined ||
+    (currentSentUpload.pendingFileId ?? null) !== origin.sentPendingFileId
+  ) {
+    return "El registro de envío pendiente cambió desde que se detectó el conflicto.";
+  }
+
+  const images = findOwnerImages(document, resolution);
+  if (images === null) {
+    return "El ítem u opción dueño de la imagen ya no está activo en el borrador.";
+  }
+
+  const activeAtOrder = images.filter(
+    (img) => isActiveDraftNode(img) && img.order === order,
+  );
+
+  if (origin.localImage === null) {
+    if (activeAtOrder.length > 0) {
+      return `La posición #${order} ahora está ocupada por otra imagen local.`;
+    }
+    if (serverImage.id !== null && images.some((img) => img.id === serverImage.id)) {
+      return "La imagen del servidor ya fue incorporada al borrador local.";
+    }
+    return null;
+  }
+
+  const expected = origin.localImage;
+  const currentLocal = images.find((img) => img.draftId === expected.draftId);
+  if (!currentLocal) {
+    return "La imagen local original fue eliminada del borrador.";
+  }
+  if (
+    currentLocal.id !== expected.id ||
+    currentLocal.pendingFileId !== expected.pendingFileId ||
+    currentLocal.status !== expected.status
+  ) {
+    return "El estado de la imagen local cambió desde que se detectó el conflicto.";
+  }
+
+  if (expected.status === "DELETED") {
+    if (activeAtOrder.length > 0) {
+      return `Se adjuntó una nueva imagen en la posición #${order} después de detectar el conflicto.`;
+    }
+    return null;
+  }
+
+  if (currentLocal.order !== order) {
+    return "El orden de la imagen local cambió desde que se detectó el conflicto.";
+  }
+  if (activeAtOrder.some((img) => img.draftId !== expected.draftId)) {
+    return `Otra imagen local ocupa ahora la posición #${order}.`;
+  }
+  return null;
+}
+
 /**
  * Resuelve manualmente un conflicto `UNCERTAIN_IMAGE_OPERATION` aplicando la elección del usuario
- * sobre el documento local, su línea base y el snapshot `sent`.
+ * sobre el documento local, su línea base y el snapshot `sent`, siempre que la huella de origen
+ * siga coincidiendo con el estado actual.
  */
 export function resolveUncertainImageConflict(params: {
   document: VersionDocument;
@@ -748,12 +891,19 @@ export function resolveUncertainImageConflict(params: {
   sent: SentSnapshot;
   resolution: UncertainImageResolutionContext;
   choice: UncertainImageResolutionChoice;
-}): {
-  document: VersionDocument;
-  baseline: VersionDocument | null;
-  sent: SentSnapshot;
-} {
+}): ResolveUncertainImageConflictResult {
   const { document, baseline, sent, resolution, choice } = params;
+  const staleReason = getStaleUncertainImageReason({ document, sent, resolution });
+  if (staleReason !== null) {
+    return {
+      stale: true,
+      staleReason,
+      document,
+      baseline,
+      sent,
+    };
+  }
+
   const { ownerKind, subtestDraftId, itemDraftId, optionDraftId, uploadKey, localImageDraftId, serverImage } =
     resolution;
 
@@ -853,6 +1003,7 @@ export function resolveUncertainImageConflict(params: {
   }
 
   return {
+    stale: false,
     document: nextDocument,
     baseline: nextBaseline,
     sent: nextSent,
@@ -971,6 +1122,7 @@ function reconcileImages(params: {
               itemDraftId,
               optionDraftId,
               uploadKey,
+              sentUpload,
               intention: "delete",
               serverImage: theirs,
             });
@@ -1057,9 +1209,10 @@ function reconcileImages(params: {
             itemDraftId,
             optionDraftId,
             uploadKey: matchedUploadKey,
+            sentUpload,
             intention: "delete",
             serverImage: theirs,
-            localImageDraftId: mine.draftId,
+            localImage: mine,
           });
           reconciled.push(structuredClone(mine));
         }
@@ -1129,52 +1282,23 @@ function reconcileImages(params: {
         }
 
         const sameFile = isSameUploadedFile(mine, sentUpload, ctx.pendingFiles);
-        const expectedRole =
-          ownerKind === "item" ? (sentUpload.role ?? "ENUNCIADO") : sentUpload.role;
-        const mineRole = ownerKind === "item" ? (mine.role ?? "ENUNCIADO") : mine.role;
-        const metadataEditedAfterError =
-          sentUpload.altText !== undefined &&
-          (mine.altText.trim() !== sentUpload.altText.trim() || mineRole !== expectedRole);
-        const theirsRole = ownerKind === "item" ? (theirs.role ?? "ENUNCIADO") : theirs.role;
-        const theirsMatchesSentMetadata =
-          (sentUpload.altText === undefined ||
-            theirs.altText.trim() === sentUpload.altText.trim()) &&
-          (sentUpload.role === undefined || theirsRole === expectedRole);
-        const hasParseableMatchingFilename =
-          extractSanitizedFilenameFromStoragePath(theirs.storagePath) !== null &&
-          sentUpload.fileName != null;
-
-        if (
-          hasParseableMatchingFilename &&
-          sameFile &&
-          !metadataEditedAfterError &&
-          theirsMatchesSentMetadata
-        ) {
-          // Regla 4: el usuario no tocó la imagen y no implica escribir sobre el recurso → confirmar EXISTING.
-          delete ctx.remainingSent.uploads[uploadKey];
-          ctx.adopted += 1;
-          reconciled.push({
-            ...structuredClone(theirs),
-            draftId: mine.draftId,
-            status: "EXISTING",
-          });
-        } else {
-          // Reglas 2, 3 y 4: coincidencia insuficiente o intención posterior → conflicto manual, nunca PUT automático.
-          pushUncertainImageConflict({
-            ctx,
-            ownerKind,
-            ownerLabel,
-            itemNode,
-            subtestDraftId,
-            itemDraftId,
-            optionDraftId,
-            uploadKey,
-            intention: sameFile ? "reupload" : "replace",
-            serverImage: theirs,
-            localImageDraftId: mine.draftId,
-          });
-          reconciled.push(structuredClone(mine));
-        }
+        // Sin identidad remota verificable se elimina la adopción automática: toda coincidencia
+        // (nombre igual o ruta no legible) abre conflicto manual, haya o no intención local posterior.
+        pushUncertainImageConflict({
+          ctx,
+          ownerKind,
+          ownerLabel,
+          itemNode,
+          subtestDraftId,
+          itemDraftId,
+          optionDraftId,
+          uploadKey,
+          sentUpload,
+          intention: sameFile ? "reupload" : "replace",
+          serverImage: theirs,
+          localImage: mine,
+        });
+        reconciled.push(structuredClone(mine));
       } else {
         if (sentUpload !== undefined && base && theirs.resourceId === base.resourceId) {
           delete ctx.remainingSent.uploads[uploadKey];

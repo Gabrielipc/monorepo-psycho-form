@@ -3,6 +3,11 @@ import { registerAccountReset } from "../../store/accountReset";
 import { useStaffAuth } from "../../store/staffAuth";
 import type { SaveStepId } from "./document/adapters";
 import { collectPendingImageUploads } from "./document/diff";
+import {
+  resolveUncertainImageConflict as resolveUncertainImageConflictInDoc,
+  type UncertainImageResolutionChoice,
+  type UncertainImageResolutionContext,
+} from "./document/reconcile";
 import { documentReducer, isDocumentDirty, type DocumentAction } from "./document/reducer";
 import {
   baremoNaturalKey,
@@ -90,6 +95,11 @@ export interface BuilderState {
       sent?: SentSnapshot;
     },
   ) => void;
+  resolveUncertainImageConflict: (
+    resolution: UncertainImageResolutionContext,
+    choice: UncertainImageResolutionChoice,
+    options?: { clearPartialIfClean?: boolean },
+  ) => { applied: boolean; stale: boolean; staleReason?: string };
   commitSaved: (freshServerDoc: VersionDocument) => void;
   reset: () => void;
 }
@@ -687,6 +697,115 @@ export const useBuilderStore = create<BuilderState>()((set, get) => ({
       pendingFiles: nextPendingFiles,
       autosaveSavedAt,
     });
+  },
+
+  resolveUncertainImageConflict: (resolution, choice, options) => {
+    const state = get();
+    const currentDoc = state.document;
+    if (!currentDoc) {
+      return { applied: false, stale: true, staleReason: "No hay documento cargado." };
+    }
+
+    const resolved = resolveUncertainImageConflictInDoc({
+      document: currentDoc,
+      baseline: state.serverBaseline,
+      sent: state.sent,
+      resolution,
+      choice,
+    });
+    const userId = getCurrentUserId();
+
+    if (resolved.stale) {
+      const staleMessage =
+        resolved.staleReason ??
+        "La imagen local cambió desde que se detectó el conflicto; vuelve a sincronizar antes de continuar.";
+      const nextPartialSave: PersistedPartialSaveInfo = state.partialSave
+        ? {
+            ...state.partialSave,
+            message: staleMessage,
+            reconciliationPending: true,
+          }
+        : {
+            message: staleMessage,
+            completedSteps: [],
+            pendingSteps: [],
+            reconciliationPending: true,
+          };
+      const { autosaveSavedAt } = syncAutosaveForDocument(
+        userId,
+        currentDoc,
+        state.serverBaseline,
+        state.baselineSignature,
+        true,
+        nextPartialSave,
+        state.sent,
+      );
+      set({
+        reconciliationPending: true,
+        partialSave: nextPartialSave,
+        autosaveSavedAt,
+      });
+      return { applied: false, stale: true, staleReason: staleMessage };
+    }
+
+    // Nunca retirar un File pendiente que no sea exactamente el del snapshot de origen.
+    const snapshotPendingFileId = resolution.origin.localImage?.pendingFileId ?? null;
+    const stillNeededFileIds = new Set(
+      collectPendingImageUploads(resolved.document).map((u) => u.pendingFileId),
+    );
+    const nextPendingFiles: Record<string, PendingFileEntry> = {};
+    for (const [id, entry] of Object.entries(state.pendingFiles)) {
+      const isSnapshotFile = snapshotPendingFileId !== null && id === snapshotPendingFileId;
+      if (!isSnapshotFile || stillNeededFileIds.has(id)) {
+        nextPendingFiles[id] = entry;
+      } else {
+        try {
+          URL.revokeObjectURL(entry.previewUrl);
+        } catch {
+          // Ignorar si ya estaba revocada
+        }
+      }
+    }
+
+    const nextBaseline = resolved.baseline ?? state.serverBaseline;
+    const nextBaselineSignature = nextBaseline
+      ? documentSignature(nextBaseline)
+      : state.baselineSignature;
+    const nextSent = cloneSentSnapshot(resolved.sent);
+    const shouldClearPartial =
+      Boolean(options?.clearPartialIfClean) &&
+      !isDocumentDirty(resolved.document) &&
+      !state.reconciliationPending;
+    const nextPartialSave = shouldClearPartial ? null : state.partialSave;
+    const remappedSelection = remapSelectedNodeAfterSave(
+      currentDoc,
+      resolved.document,
+      state.selectedNode,
+    );
+    const { autosaveSavedAt } = syncAutosaveForDocument(
+      userId,
+      resolved.document,
+      nextBaseline,
+      nextBaselineSignature,
+      state.reconciliationPending,
+      nextPartialSave,
+      nextSent,
+    );
+
+    set({
+      document: resolved.document,
+      serverBaseline: nextBaseline,
+      baselineSignature: nextBaselineSignature,
+      partialSave: nextPartialSave,
+      sent: nextSent,
+      selectedNode: remappedSelection,
+      past: [],
+      future: [],
+      pendingFiles: nextPendingFiles,
+      autosaveSavedAt,
+    });
+
+    return { applied: true, stale: false };
   },
 
   commitSaved: (freshServerDoc) => {

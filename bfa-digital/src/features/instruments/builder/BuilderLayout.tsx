@@ -12,7 +12,6 @@ import {
   collectPendingImageUploads,
   detectOrderCollisions,
   isDocumentDirty,
-  resolveUncertainImageConflict,
   validateVersionDocument,
   type DocumentConflictNode,
   type UncertainImageResolutionChoice,
@@ -149,29 +148,46 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
     choice: UncertainImageResolutionChoice,
   ) {
     const target = conflicts[conflictIndex];
-    if (!target || target.kind !== "UNCERTAIN_IMAGE_OPERATION" || !target.resolution || !doc) {
+    if (
+      !target ||
+      target.kind !== "UNCERTAIN_IMAGE_OPERATION" ||
+      !target.resolution ||
+      target.stale ||
+      !doc
+    ) {
       return;
     }
-    const resolved = resolveUncertainImageConflict({
-      document: doc,
-      baseline: store.serverBaseline,
-      sent: store.sent,
-      resolution: target.resolution,
-      choice,
-    });
     const remainingConflicts = conflicts.filter((_, idx) => idx !== conflictIndex);
-    const nextDirty = isDocumentDirty(resolved.document);
-    const shouldClearPartial =
-      remainingConflicts.length === 0 && !nextDirty && !store.reconciliationPending;
-
-    store.reconcilePartialSave(resolved.document, resolved.baseline, undefined, {
-      sent: resolved.sent,
-      ...(shouldClearPartial ? { partialSave: null } : {}),
+    const outcome = store.resolveUncertainImageConflict(target.resolution, choice, {
+      clearPartialIfClean: remainingConflicts.length === 0,
     });
+    if (outcome.stale) {
+      const staleReason =
+        outcome.staleReason ??
+        "La imagen local cambió desde que se detectó el conflicto; vuelve a sincronizar.";
+      setConflicts((prev) =>
+        prev.map((conflict, idx) =>
+          idx === conflictIndex
+            ? {
+                ...conflict,
+                stale: true,
+                reason: `Conflicto obsoleto: ${staleReason}`,
+              }
+            : conflict,
+        ),
+      );
+      setError(
+        "El conflicto de imagen quedó obsoleto porque cambió el borrador local. Usa «Reintentar sincronización» para reconciliar nuevamente.",
+      );
+      return;
+    }
+
     setConflicts(remainingConflicts);
     if (remainingConflicts.length === 0) {
       setError(undefined);
-      if (choice === "keep_server" && !nextDirty && !store.reconciliationPending) {
+      const nextDoc = useBuilderStore.getState().document;
+      const nextDirty = nextDoc ? isDocumentDirty(nextDoc) : false;
+      if (choice === "keep_server" && !nextDirty && !useBuilderStore.getState().reconciliationPending) {
         setMessage("Se conservó la imagen del servidor.");
       }
     }
@@ -428,29 +444,32 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
                   >
                     {conflict.label}
                   </button>
+                  {conflict.stale ? " (Conflicto obsoleto)" : ""}
                   {`: ${conflict.reason}`}
-                  {conflict.kind === "UNCERTAIN_IMAGE_OPERATION" && conflict.resolution && (
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={pending}
-                        onClick={() => resolveUncertainImage(index, "keep_server")}
-                      >
-                        Conservar la imagen del servidor
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={pending}
-                        onClick={() => resolveUncertainImage(index, "apply_mine")}
-                      >
-                        Aplicar mi cambio
-                      </Button>
-                    </div>
-                  )}
+                  {conflict.kind === "UNCERTAIN_IMAGE_OPERATION" &&
+                    conflict.resolution &&
+                    !conflict.stale && (
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => resolveUncertainImage(index, "keep_server")}
+                        >
+                          Conservar la imagen del servidor
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={pending}
+                          onClick={() => resolveUncertainImage(index, "apply_mine")}
+                        >
+                          Aplicar mi cambio
+                        </Button>
+                      </div>
+                    )}
                 </li>
               ))}
             </ul>

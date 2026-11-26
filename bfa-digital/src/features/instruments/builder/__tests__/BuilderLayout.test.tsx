@@ -1114,4 +1114,155 @@ describe("BuilderLayout — ALTO 1, MEDIO 3, MEDIO 5", () => {
     unmount();
     queryClient.clear();
   });
+
+  it("F3-FIX-8 (ALTO 2 UI): adjuntar otra imagen tras conflicto UNCERTAIN_IMAGE_OPERATION y pulsar «Conservar la imagen del servidor» marca obsoleto, pide resincronizar y conserva el File nuevo", async () => {
+    let failReload = false;
+    let putCalls = 0;
+    let uploadedBody = "";
+    let serverImage: {
+      sourceImageId: number;
+      resourceId: number;
+      order: number;
+      altText: string;
+      storagePath: string;
+      role: string;
+    } | null = null;
+
+    server.use(
+      http.get(`${API}/scoring/strategies`, () => HttpResponse.json(ok([]))),
+      http.get(`${API}/tests`, () => HttpResponse.json(ok([makeTestWire(1)]))),
+      http.get(`${API}/tests/1/versions`, () =>
+        HttpResponse.json(ok([makeVersionWire(10, "Lea con atención")])),
+      ),
+      http.get(`${API}/test-versions/10/subtests`, () => {
+        if (failReload) {
+          return HttpResponse.json({ success: false, message: "Recarga 503" }, { status: 503 });
+        }
+        return HttpResponse.json(ok([makeSubtestWire(20, "MEM", "Memoria Visual", 1)]));
+      }),
+      http.get(`${API}/subtests/20/clone-template`, () => {
+        const tpl = makeTemplateWire(20, "MEM");
+        (tpl.items[0] as { images: unknown[] }).images = serverImage ? [serverImage] : [];
+        return HttpResponse.json(ok(tpl));
+      }),
+      http.get(`${API}/subtests/20/scoring-rules`, () =>
+        HttpResponse.json(ok([makeRuleWire(80, 20)])),
+      ),
+      http.get(`${API}/test-versions/10/baremos`, () => HttpResponse.json(ok([]))),
+      http.post(`${API}/items/201/images`, () => {
+        serverImage = {
+          sourceImageId: 88,
+          resourceId: 905,
+          order: 1,
+          altText: "",
+          storagePath: "test-config/items/201/550e8400-e29b-41d4-a716-446655440000-vieja.png",
+          role: "ENUNCIADO",
+        };
+        failReload = true;
+        return HttpResponse.json({ success: false, message: "503 tras POST" }, { status: 503 });
+      }),
+      http.put(`${API}/items/201/images/by-order/1`, async ({ request }) => {
+        putCalls += 1;
+        uploadedBody = await request.text();
+        serverImage = {
+          sourceImageId: 88,
+          resourceId: 995,
+          order: 1,
+          altText: "",
+          storagePath: "test-config/items/201/550e8400-e29b-41d4-a716-446655440001-nueva.png",
+          role: "ENUNCIADO",
+        };
+        return HttpResponse.json(
+          ok({
+            imageLinkId: 88,
+            resourceId: 995,
+            storagePath: serverImage.storagePath,
+            filename: "nueva.png",
+            mimeType: "image/png",
+            sizeBytes: 9,
+            hash: "h-new",
+            order: 1,
+            altText: "",
+            role: "ENUNCIADO",
+          }),
+        );
+      }),
+      http.get(`${API}/items/images/resources/905`, () =>
+        new HttpResponse(new Blob(["old"], { type: "image/png" }), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      ),
+      http.get(`${API}/items/images/resources/995`, () =>
+        new HttpResponse(new Blob(["new"], { type: "image/png" }), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      ),
+    );
+
+    const { unmount, queryClient } = renderBuilder();
+    await screen.findByRole("region", { name: "Editor de versión" });
+
+    fireEvent.click(screen.getByRole("button", { name: /IT-1/i }));
+    const itemImagesHeading = await screen.findByRole("heading", { name: "Imágenes de estímulo" });
+    const itemImagesSection = itemImagesHeading.closest("section")!;
+    const fileInput = within(itemImagesSection).getByLabelText("Seleccionar archivo de imagen");
+
+    // 1. Adjuntar vieja.png y guardar -> POST 503 + recarga 503
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["old-bytes"], "vieja.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    expect(await screen.findByText(/Reconciliación pendiente:/i)).toBeVisible();
+
+    // 2. Eliminar vieja.png localmente y reintentar -> aparece UNCERTAIN_IMAGE_OPERATION
+    fireEvent.click(within(itemImagesSection).getByRole("button", { name: "Eliminar imagen" }));
+    failReload = false;
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar sincronización" }));
+    const keepServerBtn = await screen.findByRole("button", {
+      name: "Conservar la imagen del servidor",
+    });
+
+    // 3. Adjuntar nueva.png en la posición libre antes de resolver el conflicto viejo
+    const newFile = new File(["new-bytes"], "nueva.png", { type: "image/png" });
+    fireEvent.change(within(itemImagesSection).getByLabelText("Seleccionar archivo de imagen"), {
+      target: { files: [newFile] },
+    });
+    const attachedImgBeforeClick =
+      useBuilderStore.getState().document?.subtests[0]?.items[0]?.images[0];
+    expect(attachedImgBeforeClick?.fileName).toBe("nueva.png");
+    const newPendingFileId = attachedImgBeforeClick!.pendingFileId!;
+    expect(useBuilderStore.getState().getPendingFilesMap()[newPendingFileId]).toBe(newFile);
+
+    // 4. Pulsar la resolución antigua «Conservar la imagen del servidor»
+    fireEvent.click(keepServerBtn);
+
+    // El conflicto queda marcado como obsoleto, pide resincronización y NO destruye nueva.png ni su File
+    expect(await screen.findByText(/Conflicto obsoleto/i)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Conservar la imagen del servidor" }),
+    ).not.toBeInTheDocument();
+    expect(useBuilderStore.getState().reconciliationPending).toBe(true);
+    expect(useBuilderStore.getState().getPendingFilesMap()[newPendingFileId]).toBe(newFile);
+    expect(useBuilderStore.getState().document?.subtests[0]?.items[0]?.images[0]).toMatchObject({
+      fileName: "nueva.png",
+      pendingFileId: newPendingFileId,
+      status: "CREATED",
+    });
+
+    // 5. Reintentar sincronización reconcilia con nueva.png y permite aplicar PUT con nueva.png
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar sincronización" }));
+    const applyNewBtn = await screen.findByRole("button", { name: "Aplicar mi cambio" });
+    fireEvent.click(applyNewBtn);
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+
+    expect(await screen.findByText("Versión guardada.")).toBeVisible();
+    expect(putCalls).toBe(1);
+    expect(uploadedBody).toContain('filename="nueva.png"');
+    expect(uploadedBody).toContain("new-bytes");
+
+    unmount();
+    queryClient.clear();
+  });
 });
