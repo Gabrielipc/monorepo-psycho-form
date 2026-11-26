@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+._*
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Node / Frontend (bfa-digital)
+node_modules/
+dist/
+.pnpm-store/
+.tanstack/
+
+# Java / Maven (psycho-form)
+target/
+build/
+.mvn/wrapper/maven-wrapper.jar
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Agent & worktree directories
+.worktrees/
+.agents/
+.codex/
