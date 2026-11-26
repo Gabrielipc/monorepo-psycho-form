@@ -784,7 +784,7 @@ describe("Runner del participante (R-04)", () => {
 
     expect(await screen.findByText("Evaluación Finalizada")).toBeInTheDocument();
     expect(finishAttemptPayload).toEqual({ timeSeconds: 12 });
-  }, 15_000);
+  });
 
   it("muestra aviso descartable useDiscardNotice cuando se descartó cola de otra asignación e ignora STALE_PARTICIPANT", async () => {
     // Cola previa de asignación #11 en sessionStorage
