@@ -4,6 +4,8 @@ import { apiClient } from '../api/axios';
 import { catalogService } from '../api/catalogService';
 import { Carrera, CatalogoSexo, Cohorte, GrupoAcademico, ParticipantRequest } from '../api/types';
 import { mapParticipant } from './participantMapper';
+import { registerAccountReset } from './accountReset';
+import { captureAccountScope } from './accountScope';
 
 export interface Participant {
   id: string; // UUID string
@@ -48,23 +50,12 @@ export interface SessionAssignment {
   attemptId?: number | null;
 }
 
-export interface Incidence {
-  id: string;
-  sessionId: string;
-  participantId: string;
-  participantName: string;
-  timestamp: string;
-  text: string;
-}
-
 interface AdminState {
   participants: Participant[];
   sessions: Session[];
   assignments: Record<string, SessionAssignment[]>; // sessionId -> assignments
-  incidences: Incidence[];
   generatedTokens: Record<string, string>; // assignmentId -> rawToken
   versionSubtests: Record<string, any[]>;
-  simulationActive: Record<string, boolean>;
   loading: boolean;
   error: string | null;
 
@@ -87,8 +78,10 @@ interface AdminState {
   removeSexo: (id: number) => Promise<void>;
 
   fetchParticipants: () => Promise<void>;
-  fetchSessions: () => Promise<void>;
-  fetchAssignments: (sessionId: string) => Promise<void>;
+  /** Devuelve la lista cargada, o `null` si la carga falló o la cuenta cambió (resultado propio de ESTA llamada). */
+  fetchSessions: () => Promise<Session[] | null>;
+  /** `true` si la carga terminó bien; `false` si falló o la cuenta cambió. */
+  fetchAssignments: (sessionId: string) => Promise<boolean>;
   fetchVersionSubtests: (versionId: string) => Promise<void>;
   addParticipant: (participant: ParticipantRequest) => Promise<void>;
   createSession: (
@@ -111,30 +104,32 @@ interface AdminState {
     participantIds: string[]
   ) => Promise<void>;
   updateSessionStatus: (sessionId: string, status: Session['status']) => Promise<void>;
-  assignParticipantToSession: (sessionId: string, participantId: string) => Promise<void>;
-  revokeAssignment: (sessionId: string, assignmentId: number) => Promise<void>;
-  updateAssignmentStatus: (sessionId: string, participantId: string, status: SessionAssignment['status']) => Promise<void>;
-  addIncidence: (sessionId: string, participantId: string, text: string) => Promise<void>;
-  setSimulationActive: (sessionId: string, active: boolean) => void;
-  tickSimulation: (sessionId: string) => void;
 }
+
+export const ADMIN_STORAGE_KEY = 'bfa-digital-admin-storage';
+
+/** 0 = persistía `generatedTokens`; 1 = no persiste ningún dato de servidor ni credencial. */
+const ADMIN_STORAGE_VERSION = 1;
+
+/** Estado de datos (sin acciones) con el que arranca el store. Cada llamada devuelve referencias nuevas. */
+const createInitialAdminData = () => ({
+  participants: [] as Participant[],
+  sessions: [] as Session[],
+  assignments: {} as AdminState['assignments'],
+  generatedTokens: {} as AdminState['generatedTokens'],
+  versionSubtests: {} as AdminState['versionSubtests'],
+  loading: false,
+  error: null as string | null,
+  carreras: [] as Carrera[],
+  gruposAcademicos: [] as GrupoAcademico[],
+  cohortes: [] as Cohorte[],
+  sexos: [] as CatalogoSexo[],
+});
 
 export const useAdminStore = create<AdminState>()(
   persist(
     (set, get) => ({
-      participants: [],
-      sessions: [],
-      assignments: {},
-      incidences: [],
-      generatedTokens: {},
-      versionSubtests: {},
-      simulationActive: {},
-      loading: false,
-      error: null,
-      carreras: [],
-      gruposAcademicos: [],
-      cohortes: [],
-      sexos: [],
+      ...createInitialAdminData(),
 
       fetchCarreras: async () => {
         set({ loading: true, error: null });
@@ -297,9 +292,11 @@ export const useAdminStore = create<AdminState>()(
       },
 
       fetchSessions: async () => {
+        const scope = captureAccountScope();
         set({ loading: true, error: null });
         try {
           const res = await apiClient.get('/sesiones');
+          if (!scope.isCurrent()) return null;
           if (res.data.success) {
             const mapped = res.data.data.map((s: any) => {
               let status: Session['status'] = 'PLANIFICADA';
@@ -321,18 +318,23 @@ export const useAdminStore = create<AdminState>()(
               };
             });
             set({ sessions: mapped, loading: false });
+            return mapped as Session[];
           } else {
             throw new Error(res.data.message);
           }
         } catch (err: any) {
+          if (!scope.isCurrent()) return null;
           set({ error: err.message, loading: false });
+          return null;
         }
       },
 
       fetchAssignments: async (sessionId: string) => {
+        const scope = captureAccountScope();
         set({ loading: true, error: null });
         try {
           const res = await apiClient.get(`/sesiones/${sessionId}/asignaciones`);
+          if (!scope.isCurrent()) return false;
           if (res.data.success) {
             const localTokens = get().generatedTokens || {};
             const mapped: SessionAssignment[] = res.data.data.map((a: any) => {
@@ -362,11 +364,14 @@ export const useAdminStore = create<AdminState>()(
               },
               loading: false
             }));
+            return true;
           } else {
             throw new Error(res.data.message);
           }
         } catch (err: any) {
+          if (!scope.isCurrent()) return false;
           set({ error: err.message, loading: false });
+          return false;
         }
       },
 
@@ -453,110 +458,30 @@ export const useAdminStore = create<AdminState>()(
         }
       },
 
-      assignParticipantToSession: async (sessionId, participantId) => {
-        set({ loading: true, error: null });
-        try {
-          const res = await apiClient.post(`/sesiones/${sessionId}/asignaciones`, {
-            participantId
-          });
-          if (res.data.success) {
-            const assigned = res.data.data;
-            const assignmentId = String(assigned.assignmentId);
-            const newTokens = {
-              ...get().generatedTokens,
-              [assignmentId]: `${assignmentId}-${assigned.rawToken}`
-            };
-            set({ generatedTokens: newTokens });
-            await get().fetchAssignments(sessionId);
-          } else {
-            throw new Error(res.data.message);
-          }
-        } catch (err: any) {
-          set({ error: err.message, loading: false });
-          throw err;
-        }
-      },
-
-      revokeAssignment: async (sessionId, assignmentId) => {
-        set({ loading: true, error: null });
-        try {
-          const res = await apiClient.post(`/sesiones/${sessionId}/asignaciones/${assignmentId}/revocar`);
-          if (!res.data.success) {
-            throw new Error(res.data.message || "No se pudo revocar la asignacion.");
-          }
-          await get().fetchAssignments(sessionId);
-        } catch (err: any) {
-          set({ error: err.message, loading: false });
-          throw err;
-        }
-      },
-
-      updateAssignmentStatus: async (sessionId, participantId, status) => {
-        set((state) => {
-          const sessionAsgs = state.assignments[sessionId] || [];
-          const updated = sessionAsgs.map((a) => {
-            if (a.participantId === participantId) {
-              return {
-                ...a,
-                status,
-                state: status === 'REVOCADO' ? 'anulado' as const : a.state
-              };
-            }
-            return a;
-          });
-          return {
-            assignments: {
-              ...state.assignments,
-              [sessionId]: updated
-            }
-          };
-        });
-      },
-
-      addIncidence: async (sessionId, participantId, text) => {
-        set({ loading: true, error: null });
-        try {
-          const res = await apiClient.post(`/sesiones/${sessionId}/incidencias`, { participantId, text });
-          if (!res.data.success) {
-            throw new Error(res.data.message || "No se pudo registrar la incidencia.");
-          }
-          const participantName = get().participants.find(p => p.id === participantId)?.name || 'Participante';
-          const saved = res.data.data || {};
-          const newIncidence: Incidence = {
-            id: String(saved.id || `inc-${Date.now()}`),
-            sessionId,
-            participantId,
-            participantName: saved.participantName || participantName,
-            timestamp: saved.timestamp || new Date().toLocaleTimeString('es-NI', { hour: '2-digit', minute: '2-digit' }),
-            text: saved.text || text
-          };
-          set((state) => ({
-            incidences: [newIncidence, ...state.incidences],
-            loading: false
-          }));
-        } catch (err: any) {
-          set({ error: err.message, loading: false });
-          throw err;
-        }
-      },
-
-      setSimulationActive: (sessionId, active) => {
-        set((state) => ({
-          simulationActive: {
-            ...state.simulationActive,
-            [sessionId]: active
-          }
-        }));
-      },
-
-      tickSimulation: () => {}
     }),
     {
-      name: 'bfa-digital-admin-storage',
-      partialize: (state) => ({
-        generatedTokens: state.generatedTokens,
-        incidences: state.incidences
-      })
+      name: ADMIN_STORAGE_KEY,
+      version: ADMIN_STORAGE_VERSION,
+      // `generatedTokens` (tokens de acceso de participantes) vive SOLO en memoria: nunca se
+      // persiste. La versión 0 sí los guardaba; la migración los elimina del storage al hidratar.
+      partialize: () => ({}),
+      migrate: (persisted) => {
+        const { generatedTokens: _discarded, ...rest } = (persisted ?? {}) as Record<string, unknown>;
+        void _discarded;
+        return rest as unknown as AdminState;
+      },
     }
   )
 );
+
+/**
+ * Devuelve el store al estado inicial y borra su persistencia. Se ejecuta en cada cambio
+ * de cuenta de staff (login con otro usuario, logout, 401, expiración) para que los datos
+ * de servidor de una cuenta nunca se vean desde otra.
+ */
+export function resetAdminStore(): void {
+  useAdminStore.setState(createInitialAdminData());
+  useAdminStore.persist.clearStorage();
+}
+
+registerAccountReset(resetAdminStore);

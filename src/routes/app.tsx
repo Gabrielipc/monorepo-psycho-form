@@ -1,6 +1,9 @@
-import { ReactNode } from "react";
-import { createFileRoute, Outlet, Link, redirect, useNavigate, useLocation } from "@tanstack/react-router";
-import { useAuthStore, normalizeRole } from "../store/authStore";
+import { ReactNode, useEffect, useRef } from "react";
+import { createFileRoute, Outlet, Link, redirect, useNavigate, useLocation, useRouter } from "@tanstack/react-router";
+import { useStaffAuth } from "../store/staffAuth";
+import { normalizeRole } from "../store/authStore";
+import { ROUTE_PERMISSIONS } from "../store/routePermissions";
+import { ensureStaffUser } from "../store/ensureStaffUser";
 import { Brand } from "../app/components/brand";
 import {
   LayoutDashboard, Users, ClipboardList, Activity, FileBarChart,
@@ -13,10 +16,16 @@ import { Badge } from "../app/components/ui/badge";
 import { Button } from "../app/components/ui/button";
 
 export const Route = createFileRoute("/app")({
-  beforeLoad: () => {
-    const isAuthenticated = useAuthStore.getState().isAuthenticated();
-    if (!isAuthenticated) {
-      throw redirect({ to: "/login" });
+  beforeLoad: async ({ context, location }) => {
+    const toLogin = () => redirect({ to: "/login", search: { redirect: location.href } });
+
+    if (!useStaffAuth.getState().token) {
+      throw toLogin();
+    }
+
+    // No se confía solo en el storage: /auth/me manda (permisos y roles vigentes).
+    if ((await ensureStaffUser(context.queryClient)) === "login") {
+      throw toLogin();
     }
   },
   component: AppLayout,
@@ -26,54 +35,55 @@ interface NavItem {
   to: string;
   label: string;
   icon: any;
-  roles: string[];
+  /** Visible si el usuario tiene AL MENOS UNO. Vacío = cualquier usuario autenticado. */
+  permissions: readonly string[];
 }
 
 const NAV_GROUPS: { group: string; items: NavItem[] }[] = [
   {
     group: "General",
     items: [
-      { to: "/app/dashboard", label: "Inicio", icon: LayoutDashboard, roles: ["aplicador", "psicologo", "consultor", "admin"] },
+      { to: "/app/dashboard", label: "Inicio", icon: LayoutDashboard, permissions: ROUTE_PERMISSIONS["/app/dashboard"] },
     ],
   },
   {
     group: "Catálogos",
     items: [
-      { to: "/app/carreras", label: "Carreras", icon: BookOpen, roles: ["aplicador", "psicologo", "admin"] },
-      { to: "/app/grupos", label: "Grupos Académicos", icon: Layers, roles: ["aplicador", "psicologo", "admin"] },
-      { to: "/app/cohortes", label: "Cohortes", icon: Calendar, roles: ["aplicador", "psicologo", "admin"] },
-      { to: "/app/sexos", label: "Sexos", icon: Users, roles: ["aplicador", "psicologo", "admin"] },
+      { to: "/app/carreras", label: "Carreras", icon: BookOpen, permissions: ROUTE_PERMISSIONS["/app/carreras"] },
+      { to: "/app/grupos", label: "Grupos Académicos", icon: Layers, permissions: ROUTE_PERMISSIONS["/app/grupos"] },
+      { to: "/app/cohortes", label: "Cohortes", icon: Calendar, permissions: ROUTE_PERMISSIONS["/app/cohortes"] },
+      { to: "/app/sexos", label: "Sexos", icon: Users, permissions: ROUTE_PERMISSIONS["/app/sexos"] },
     ],
   },
   {
     group: "Aplicación",
     items: [
-      { to: "/app/sesiones", label: "Monitor de sesiones", icon: Activity, roles: ["aplicador", "psicologo", "admin"] },
-      { to: "/app/participantes", label: "Participantes", icon: Users, roles: ["aplicador", "psicologo", "admin"] },
+      { to: "/app/sesiones", label: "Monitor de sesiones", icon: Activity, permissions: ROUTE_PERMISSIONS["/app/sesiones"] },
+      { to: "/app/participantes", label: "Participantes", icon: Users, permissions: ROUTE_PERMISSIONS["/app/participantes"] },
     ],
   },
   {
     group: "Instrumentos",
     items: [
-      { to: "/app/instrumentos", label: "Configuración de pruebas", icon: Settings2, roles: ["psicologo", "admin"] },
+      { to: "/app/instrumentos", label: "Configuración de pruebas", icon: Settings2, permissions: ROUTE_PERMISSIONS["/app/instrumentos"] },
     ],
   },
   {
     group: "Resultados",
     items: [
-      { to: "/app/calificaciones", label: "Calificar intentos", icon: ClipboardCheck, roles: ["psicologo", "admin"] },
-      { to: "/app/resultados", label: "Resultados individuales", icon: FileBarChart, roles: ["psicologo", "consultor", "admin"] },
-      { to: "/app/dashboard-resultados", label: "Resultados agregados", icon: LayoutDashboard, roles: ["psicologo", "consultor", "admin"] },
-      { to: "/app/reportes", label: "Centro de reportes", icon: FileBarChart, roles: ["psicologo", "consultor", "admin"] },
+      { to: "/app/calificaciones", label: "Calificar intentos", icon: ClipboardCheck, permissions: ROUTE_PERMISSIONS["/app/calificaciones"] },
+      { to: "/app/resultados", label: "Resultados individuales", icon: FileBarChart, permissions: ROUTE_PERMISSIONS["/app/resultados"] },
+      { to: "/app/dashboard-resultados", label: "Resultados agregados", icon: LayoutDashboard, permissions: ROUTE_PERMISSIONS["/app/dashboard-resultados"] },
+      { to: "/app/reportes", label: "Centro de reportes", icon: FileBarChart, permissions: ROUTE_PERMISSIONS["/app/reportes"] },
     ],
   },
   {
     group: "Administración",
     items: [
-      { to: "/app/auditoria", label: "Auditoría", icon: ShieldCheck, roles: ["admin"] },
-      { to: "/app/usuarios", label: "Usuarios", icon: UserCog, roles: ["admin"] },
-      { to: "/app/roles", label: "Roles y permisos", icon: UserCog, roles: ["admin"] },
-      { to: "/app/respaldos", label: "Respaldos", icon: Database, roles: ["admin"] },
+      { to: "/app/auditoria", label: "Auditoría", icon: ShieldCheck, permissions: ROUTE_PERMISSIONS["/app/auditoria"] },
+      { to: "/app/usuarios", label: "Usuarios", icon: UserCog, permissions: ROUTE_PERMISSIONS["/app/usuarios"] },
+      { to: "/app/roles", label: "Roles y permisos", icon: UserCog, permissions: ROUTE_PERMISSIONS["/app/roles"] },
+      { to: "/app/respaldos", label: "Respaldos", icon: Database, permissions: ROUTE_PERMISSIONS["/app/respaldos"] },
     ],
   },
 ];
@@ -81,18 +91,29 @@ const NAV_GROUPS: { group: string; items: NavItem[] }[] = [
 function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const logout = useAuthStore((s) => s.logout);
-  const user = useAuthStore((s) => s.user);
+  const clearSession = useStaffAuth((s) => s.clear);
+  const hasAnyPermission = useStaffAuth((s) => s.hasAnyPermission);
+  const user = useStaffAuth((s) => s.user);
+  const sessionId = useStaffAuth((s) => s.sessionId);
+  const router = useRouter();
 
-  const rawRole = user?.roles[0] || "aplicador";
-  const role = normalizeRole(rawRole);
-  console.log("[AppLayout] Current user:", user, "-> rawRole:", rawRole, "-> resolved role:", role);
-  const initials = user?.displayName
-    ? user.displayName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()
+  // Cambió la cuenta (login/logout/expiración/otra pestaña): se re-evalúan beforeLoad y permisos.
+  const lastSessionId = useRef(sessionId);
+  useEffect(() => {
+    if (lastSessionId.current === sessionId) return;
+    lastSessionId.current = sessionId;
+    void router.invalidate();
+  }, [sessionId, router]);
+
+  const displayName = user?.username ?? "";
+  const roles = Array.from(new Set((user?.roles ?? []).map(normalizeRole)));
+  const initials = displayName
+    ? displayName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()
     : "US";
 
   const handleLogout = () => {
-    logout();
+    // clear() descarta caché de React Query y stores legacy de esta cuenta.
+    clearSession();
     navigate({ to: "/login" });
   };
 
@@ -131,7 +152,7 @@ function AppLayout() {
         </div>
         <nav className="flex-1 overflow-y-auto p-3 space-y-5">
           {NAV_GROUPS.map((g) => {
-            const items = g.items.filter((i) => i.roles.includes(role));
+            const items = g.items.filter((i) => i.permissions.length === 0 || hasAnyPermission(i.permissions));
             if (!items.length) return null;
             return (
               <div key={g.group}>
@@ -166,8 +187,8 @@ function AppLayout() {
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 leading-tight min-w-0">
-            <div className="text-sm font-semibold truncate">{user?.displayName || "Usuario"}</div>
-            <div className="text-[11px] text-white/60 capitalize font-medium">{role}</div>
+            <div className="text-sm font-semibold truncate">{displayName || "Usuario"}</div>
+            <div className="text-[11px] text-white/60 capitalize font-medium">{roles.join(", ")}</div>
           </div>
           <Button
             size="icon"
@@ -213,7 +234,8 @@ function AppLayout() {
 
         {/* Route Outlet */}
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-[#fafafa]">
-          <Outlet />
+          {/* `key`: al cambiar de cuenta de staff se remonta el área y se descarta el estado local (borradores, enlaces). */}
+          <Outlet key={sessionId} />
         </main>
       </div>
     </div>

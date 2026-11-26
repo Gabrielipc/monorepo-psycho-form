@@ -202,7 +202,7 @@ export const resultsService = {
     });
     
     // Iniciar descarga del archivo en el navegador
-    const blob = new Blob([response.data], { type: response.headers["content-type"] });
+    const blob = new Blob([response.data], { type: String(response.headers["content-type"] ?? "") });
     const link = document.createElement("a");
     link.href = window.URL.createObjectURL(blob);
     link.download = `reporte_${type.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.${format.toLowerCase()}`;

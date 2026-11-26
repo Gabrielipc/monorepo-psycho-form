@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { requireRoutePermission } from "../../store/routePermissions";
 import { CloudUpload, Database, Download, ShieldAlert } from "lucide-react";
 import { backupService, BackupFileDTO } from "../../api/backupService";
 import { Alert, AlertDescription } from "../../app/components/ui/alert";
@@ -8,6 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../app/components/ui/table";
 
 export const Route = createFileRoute("/app/respaldos")({
+  beforeLoad: requireRoutePermission("/app/respaldos"),
+  // El backend protege /backups con REPORTE_EXPORTAR.
   component: RespaldosRoute,
 });
 

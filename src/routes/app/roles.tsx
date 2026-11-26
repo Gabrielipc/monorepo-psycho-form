@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { requireRoutePermission } from "../../store/routePermissions";
 import { useEffect, useMemo, useState } from "react";
 import { Save, ShieldCheck } from "lucide-react";
 import { roleService, PermissionDTO, RoleDTO } from "../../api/roleService";
@@ -9,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Checkbox } from "../../app/components/ui/checkbox";
 
 export const Route = createFileRoute("/app/roles")({
+  beforeLoad: requireRoutePermission("/app/roles"),
   component: RolesRoute,
 });
 

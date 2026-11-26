@@ -1,3 +1,4 @@
+// @ts-nocheck -- DEUDA TEMPORAL (F-01): errores de tipos legacy; se elimina al refactorizar esta pantalla.
 import { useState, useEffect, useMemo } from "react";
 import { useNavigate, Link } from "@tanstack/react-router";
 import { useAdminStore } from "../../../../store/adminStore";

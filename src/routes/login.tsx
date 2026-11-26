@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useRef, useState } from "react";
+import { createFileRoute, redirect, useNavigate, useRouter } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { Brand } from "../app/components/brand";
 import { Button } from "../app/components/ui/button";
 import { Input } from "../app/components/ui/input";
@@ -7,15 +8,19 @@ import { Label } from "../app/components/ui/label";
 import { Card, CardContent } from "../app/components/ui/card";
 import { Alert, AlertDescription } from "../app/components/ui/alert";
 import { AlertCircle, Lock, ShieldCheck, Loader2 } from "lucide-react";
-import { authService } from "../api/authService";
-import { useAuthStore } from "../store/authStore";
+import { authKeys, authService, LOGIN_SUPERSEDED } from "../api/authService";
+import { toApiError } from "../api/errors";
+import { useStaffAuth } from "../store/staffAuth";
+import { resolveSafeRedirect } from "../store/safeRedirect";
 
 export const Route = createFileRoute("/login")({
   component: LoginRoute,
-  beforeLoad: ({ navigate }) => {
-    const isAuthenticated = useAuthStore.getState().isAuthenticated();
-    if (isAuthenticated) {
-      throw navigate({ to: "/app/dashboard" });
+  validateSearch: (search: Record<string, unknown>): { redirect?: string } => ({
+    redirect: typeof search.redirect === "string" ? search.redirect : undefined,
+  }),
+  beforeLoad: () => {
+    if (useStaffAuth.getState().token) {
+      throw redirect({ to: "/app/dashboard" });
     }
   }
 });
@@ -29,13 +34,17 @@ const DEMO_ROLES = [
 
 function LoginRoute() {
   const navigate = useNavigate();
-  const setToken = useAuthStore((s) => s.setToken);
-  const setUser = useAuthStore((s) => s.setUser);
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const { redirect: redirectTo } = Route.useSearch();
 
   const [user, setUserInput] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  // Identifica el último envío del formulario: un envío anterior que termina tarde no debe
+  // pintar errores, apagar el loading del nuevo ni navegar.
+  const submitCounter = useRef(0);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -44,18 +53,27 @@ function LoginRoute() {
       return;
     }
 
+    const submitId = (submitCounter.current += 1);
+    const isLatestSubmit = (): boolean => submitCounter.current === submitId;
     setLoading(true);
     setErr("");
 
     try {
+      // authService.login deja token, expiresAt y usuario en staffAuth (si sigue vigente).
       const result = await authService.login(user, pass);
-      setToken(result.token);
-      setUser(result.user);
-      navigate({ to: "/app/dashboard" });
-    } catch (error: any) {
-      setErr(error.message || "Error al iniciar sesión.");
+      // Solo si ESTE login sigue siendo la sesión activa: si no, no se siembra ni se navega.
+      const current = useStaffAuth.getState();
+      if (!isLatestSubmit() || current.token !== result.token) return;
+      // Sustituye cualquier /auth/me en caché de otro usuario.
+      queryClient.setQueryData(authKeys.me(current.sessionId), result.user);
+      router.history.replace(resolveSafeRedirect(redirectTo));
+    } catch (error: unknown) {
+      const apiError = toApiError(error);
+      // Un login reemplazado por otro más reciente se descarta en silencio.
+      if (apiError.code === LOGIN_SUPERSEDED || !isLatestSubmit()) return;
+      setErr(apiError.message || "Error al iniciar sesión.");
     } finally {
-      setLoading(false);
+      if (isLatestSubmit()) setLoading(false);
     }
   };
 

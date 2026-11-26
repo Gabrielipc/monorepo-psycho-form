@@ -1,4 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { gradingSearchSchema, resolveGradingSelection } from "../../features/sessions/detail/gradingSearch";
+import { requireRoutePermission } from "../../store/routePermissions";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -25,6 +27,8 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../app/components/ui/table";
 
 export const Route = createFileRoute("/app/calificaciones")({
+  validateSearch: gradingSearchSchema,
+  beforeLoad: requireRoutePermission("/app/calificaciones"),
   component: AttemptScoringRoute,
 });
 
@@ -36,31 +40,66 @@ type ResultState =
   | { status: "ready"; result: AttemptResultDTO; requiresManualReview?: boolean; pendingReviewCount?: number };
 
 function AttemptScoringRoute() {
+  const { sessionId: requestedSessionId, attemptId: highlightedAttemptId } = Route.useSearch();
   const sessions = useAdminStore((s) => s.sessions);
   const assignmentsBySession = useAdminStore((s) => s.assignments);
   const fetchSessions = useAdminStore((s) => s.fetchSessions);
   const fetchAssignments = useAdminStore((s) => s.fetchAssignments);
 
-  const [selectedSessionId, setSelectedSessionId] = useState("");
+  // Si llega `sessionId` desde el monitor, esa sesión queda preseleccionada.
+  const [selectedSessionId, setSelectedSessionId] = useState(() =>
+    requestedSessionId !== undefined ? String(requestedSessionId) : "",
+  );
   const [resultsByAttempt, setResultsByAttempt] = useState<Record<number, ResultState>>({});
   const [scoringAttemptId, setScoringAttemptId] = useState<number | null>(null);
   const [actionError, setActionError] = useState("");
 
-  useEffect(() => {
-    fetchSessions();
-  }, [fetchSessions]);
+  // `pendingRequestedId`: la preselección pedida sigue pendiente hasta que termine la carga actual de la
+  // lista (no se resuelve contra la lista en caché). `freshSessions`: resultado de ESA carga (null: aún no
+  // terminó o falló); no depende del error compartido del store.
+  const [pendingRequestedId, setPendingRequestedId] = useState(requestedSessionId);
+  const [freshSessions, setFreshSessions] = useState<{ id: string }[] | null>(null);
+  const [notFoundId, setNotFoundId] = useState<number | null>(null);
+  const listFresh = freshSessions !== null;
 
   useEffect(() => {
-    if (!selectedSessionId && sessions.length > 0) {
-      setSelectedSessionId(sessions[0].id);
-    }
-  }, [selectedSessionId, sessions]);
+    let active = true;
+    setFreshSessions(null);
+    setPendingRequestedId(requestedSessionId);
+    setNotFoundId(null);
+    if (requestedSessionId !== undefined) setSelectedSessionId(String(requestedSessionId));
+    void Promise.resolve(fetchSessions()).then((list) => {
+      if (active && list) setFreshSessions(list);
+    });
+    return () => {
+      active = false;
+    };
+  }, [fetchSessions, requestedSessionId]);
 
   useEffect(() => {
-    if (selectedSessionId) {
-      fetchAssignments(selectedSessionId);
+    const next = resolveGradingSelection({
+      sessions: freshSessions ?? sessions,
+      pending: pendingRequestedId,
+      current: selectedSessionId,
+      listFresh,
+    });
+    if (next.sessionId !== selectedSessionId) setSelectedSessionId(next.sessionId);
+    if (next.settled && pendingRequestedId !== undefined) {
+      setPendingRequestedId(undefined);
+      if (next.notFound) setNotFoundId(pendingRequestedId);
     }
-  }, [fetchAssignments, selectedSessionId]);
+  }, [selectedSessionId, sessions, freshSessions, listFresh, pendingRequestedId]);
+
+  // Las asignaciones se piden solo con la sesión validada: mientras la pedida siga pendiente no se consulta.
+  const selectionUnvalidated =
+    pendingRequestedId !== undefined && selectedSessionId === String(pendingRequestedId);
+  useEffect(() => {
+    if (selectedSessionId && !selectionUnvalidated) {
+      void fetchAssignments(selectedSessionId);
+    }
+  }, [fetchAssignments, selectedSessionId, selectionUnvalidated]);
+
+  const emptyList = listFresh && freshSessions.length === 0;
 
   const selectedSession = sessions.find((session) => session.id === selectedSessionId);
   const assignments = assignmentsBySession[selectedSessionId] || [];
@@ -97,6 +136,13 @@ function AttemptScoringRoute() {
         });
     });
   }, [attempts, resultsByAttempt]);
+
+  // Lleva a la vista el intento destacado desde el monitor (si el navegador lo soporta).
+  const hasHighlighted = highlightedAttemptId !== undefined && attempts.some((a) => a.attemptId === highlightedAttemptId);
+  useEffect(() => {
+    if (!hasHighlighted) return;
+    document.querySelector<HTMLElement>('[data-highlighted="true"]')?.scrollIntoView?.({ block: "center" });
+  }, [hasHighlighted]);
 
   const stats = {
     total: attempts.length,
@@ -151,6 +197,22 @@ function AttemptScoringRoute() {
           <RefreshCw className="mr-1 h-4 w-4" /> Actualizar
         </Button>
       </div>
+
+      {emptyList && (
+        <Alert role="status">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>No hay sesiones disponibles para calificar.</AlertDescription>
+        </Alert>
+      )}
+
+      {notFoundId !== null && (
+        <Alert role="status">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            La sesión #{notFoundId} solicitada no está en la lista de sesiones actual.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {actionError && (
         <Alert variant="destructive">
@@ -236,8 +298,14 @@ function AttemptScoringRoute() {
                   const attemptId = assignment.attemptId as number;
                   const resultState = resultsByAttempt[attemptId] || { status: "unknown" as const };
                   const canScore = assignment.state === "completado" && resultState.status === "missing";
+                  const highlighted = highlightedAttemptId !== undefined && attemptId === highlightedAttemptId;
                   return (
-                    <TableRow key={`${assignment.assignmentId}-${attemptId}`}>
+                    <TableRow
+                      key={`${assignment.assignmentId}-${attemptId}`}
+                      data-highlighted={highlighted ? "true" : undefined}
+                      aria-current={highlighted ? "true" : undefined}
+                      className={highlighted ? "bg-primary/10 ring-2 ring-inset ring-primary/40" : undefined}
+                    >
                       <TableCell className="pl-6">
                         <div className="font-medium">{assignment.participantName}</div>
                         <div className="text-xs font-mono text-muted-foreground">{assignment.participantId}</div>

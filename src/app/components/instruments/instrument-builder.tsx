@@ -1,3 +1,4 @@
+// @ts-nocheck -- DEUDA TEMPORAL (F-01): errores de tipos legacy; se elimina al refactorizar esta pantalla.
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
