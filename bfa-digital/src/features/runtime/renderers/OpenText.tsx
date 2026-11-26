@@ -1,19 +1,10 @@
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ChangeEvent,
-  type KeyboardEvent,
-} from "react";
+import { useId, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Label } from "../../../app/components/ui/label";
 import { Textarea } from "../../../app/components/ui/textarea";
 import { cn } from "../../../app/components/ui/utils";
 import { validateAnswer, type AnswerRendererProps, type AnswerValue } from "../answer-value";
 
 export const OPEN_TEXT_MAX_LENGTH = 4000;
-const OPEN_TEXT_DEBOUNCE_MS = 300;
 const WARNING_THRESHOLD_RATIO = 0.9;
 
 type OpenTextValue = Extract<AnswerValue, { kind: "TEXTO_ABIERTO" }>;
@@ -24,9 +15,11 @@ function sanitizeOpenText(raw: string): string {
 
 /**
  * Renderer para ítems de respuesta abierta (`TEXTO_ABIERTO`).
- * Actualiza el texto inmediatamente en la UI, debounced 300 ms hacia el runner,
- * hace flush en `blur` y al desmontar, elimina `'\u0000'`, respeta el límite de 4000
- * caracteres y detiene la propagación de teclas para no disparar atajos del runner.
+ * Cada cambio se emite AL INSTANTE a `onChange` (el runner lo registra en el draft local con el `itemId` del ítem
+ * que se está respondiendo): el renderer no guarda texto pendiente ni timers, así que cambiar de ítem,
+ * deshabilitar el campo (deadline) o finalizar no puede perder ni reasignar texto. El debounce del envío por red
+ * vive en el runner/draft, no aquí. Elimina `'\u0000'`, respeta el límite de 4000 caracteres y detiene la
+ * propagación de teclas para no disparar atajos del runner.
  */
 export function OpenText({ item, value, onChange, disabled = false }: AnswerRendererProps<"TEXTO_ABIERTO">) {
   const textareaId = useId();
@@ -35,82 +28,24 @@ export function OpenText({ item, value, onChange, disabled = false }: AnswerRend
   const errorId = useId();
 
   const [draftText, setDraftText] = useState(value.text);
-  const [hasPendingDebounce, setHasPendingDebounce] = useState(false);
   const [syncedProp, setSyncedProp] = useState(() => ({
     itemId: item.id,
     text: value.text,
   }));
 
-  if (item.id !== syncedProp.itemId) {
+  // Otro ítem o un cambio externo del valor (restauración, respuesta del servidor): se adopta el valor entrante.
+  if (item.id !== syncedProp.itemId || value.text !== syncedProp.text) {
     setSyncedProp({ itemId: item.id, text: value.text });
     setDraftText(value.text);
-    setHasPendingDebounce(false);
-  } else if (value.text !== syncedProp.text) {
-    setSyncedProp({ itemId: item.id, text: value.text });
-    if (!hasPendingDebounce) {
-      setDraftText(value.text);
-    }
   }
-
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingTextRef = useRef<string | null>(null);
-  const onChangeRef = useRef(onChange);
-
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  }, [onChange]);
-
-  const emitText = useCallback((rawText: string) => {
-    const nextValue: OpenTextValue = {
-      kind: "TEXTO_ABIERTO",
-      text: sanitizeOpenText(rawText),
-    };
-    if (validateAnswer(nextValue) !== null) return;
-    onChangeRef.current(nextValue);
-  }, []);
-
-  const flushPending = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const pending = pendingTextRef.current;
-    if (pending !== null) {
-      pendingTextRef.current = null;
-      emitText(pending);
-    }
-  }, [emitText]);
-
-  useEffect(() => {
-    return () => {
-      flushPending();
-    };
-  }, [flushPending]);
 
   const handleChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     if (disabled) return;
     const sanitized = sanitizeOpenText(event.target.value);
     setDraftText(sanitized);
-    setHasPendingDebounce(true);
-    pendingTextRef.current = sanitized;
-
-    if (timerRef.current !== null) {
-      clearTimeout(timerRef.current);
-    }
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      const pending = pendingTextRef.current;
-      pendingTextRef.current = null;
-      setHasPendingDebounce(false);
-      if (pending !== null) {
-        emitText(pending);
-      }
-    }, OPEN_TEXT_DEBOUNCE_MS);
-  };
-
-  const handleBlur = () => {
-    setHasPendingDebounce(false);
-    flushPending();
+    const nextValue: OpenTextValue = { kind: "TEXTO_ABIERTO", text: sanitized };
+    if (validateAnswer(nextValue) !== null) return;
+    onChange(nextValue);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -148,7 +83,6 @@ export function OpenText({ item, value, onChange, disabled = false }: AnswerRend
         id={textareaId}
         value={draftText}
         onChange={handleChange}
-        onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         onKeyUp={handleKeyUp}
         disabled={disabled}

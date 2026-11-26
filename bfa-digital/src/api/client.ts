@@ -148,13 +148,26 @@ const handleStaffUnauthorized = (sentToken: string | null): void => {
 // Logout automático por expiración del JWT: misma salida que un 401.
 setSessionExpiredHandler(redirectToLogin);
 
+/** Rutas fijas del área del participante; cualquier otro `/evaluacion/<segmento>` es el canje `/evaluacion/$code`. */
+const PARTICIPANT_FIXED_SEGMENTS = new Set(["acceso", "sesion", "subtests"]);
+
+/** ¿La pestaña está canjeando un código (`/evaluacion/$code`)? */
+export function isParticipantRedeemPath(path: string): boolean {
+  const match = /^\/evaluacion\/([^/?#]+)\/?(?:[?#].*)?$/.exec(path);
+  return match !== null && !PARTICIPANT_FIXED_SEGMENTS.has(match[1]!);
+}
+
 const handleParticipantUnauthorized = (): void => {
   const { token, clear } = useParticipantAuth.getState();
   if (!token) return;
   clear();
   // Solo se navega si el participante está en su área: si la pestaña está en /app (staff) o en
   // otra ruta, el 401 tardío de una petición del participante no debe arrastrar la navegación.
-  if (!isEvaluationPath(getCurrentPath())) return;
+  const path = getCurrentPath();
+  if (!isEvaluationPath(path)) return;
+  // Durante el canje de OTRO código (401 tardío del participante anterior mientras el nuevo canje sigue en
+  // vuelo) no se navega: basta con limpiar la sesión anterior; el canje en curso guarda la nueva.
+  if (isParticipantRedeemPath(path)) return;
   navigateTo({ to: "/evaluacion/acceso", replace: true });
 };
 

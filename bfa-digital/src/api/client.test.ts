@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { delay, http, HttpResponse } from "msw";
 import { server } from "../test/msw/server";
-import { createApiClient, participantClient, setNavigator, staffClient } from "./client";
+import { createApiClient, isParticipantRedeemPath, participantClient, setNavigator, staffClient } from "./client";
 import { ApiError, toApiError, unwrap, type ApiEnvelope } from "./errors";
 import { STAFF_AUTH_STORAGE_KEY, useStaffAuth } from "../store/staffAuth";
 import { useParticipantAuth } from "../store/participantAuth";
@@ -176,6 +176,25 @@ describe("aislamiento staff / participante", () => {
     await participantClient.get("/yo").catch(() => undefined);
 
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("401 tardío del participante anterior durante el canje de otro código: limpia la sesión anterior pero NO navega", async () => {
+    setNavigator(navigate, () => "/evaluacion/43-token-de-b");
+    useParticipantAuth.getState().setSession({ token: "participant-jwt-a", assignmentId: 7 });
+    server.use(http.get(`${API}/yo`, () => HttpResponse.json({ success: false }, { status: 401 })));
+
+    await participantClient.get("/yo").catch(() => undefined);
+
+    expect(useParticipantAuth.getState().token).toBeNull();
+    expect(navigate).not.toHaveBeenCalled(); // el canje de B en /evaluacion/$code sigue montado
+  });
+
+  it("isParticipantRedeemPath distingue el canje de las rutas fijas del participante", () => {
+    expect(isParticipantRedeemPath("/evaluacion/43-abc")).toBe(true);
+    expect(isParticipantRedeemPath("/evaluacion/43-abc?x=1")).toBe(true);
+    for (const path of ["/evaluacion/acceso", "/evaluacion/acceso?code=1", "/evaluacion/sesion", "/evaluacion/subtests/1/items/2", "/evaluacion", "/evaluacionX/1", "/app/sesiones"]) {
+      expect(isParticipantRedeemPath(path)).toBe(false);
+    }
   });
 
   it("validar el acceso del participante no pisa el token del staff", () => {

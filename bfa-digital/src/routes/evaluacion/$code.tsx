@@ -1,15 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { validateAccess } from "../../api/endpoints/runtime";
 import { ApiError } from "../../api/errors";
 import { RUNTIME_QUERY_KEY_PREFIX } from "../../api/queryClient";
-import { Alert, AlertDescription } from "../../app/components/ui/alert";
 import { Brand } from "../../app/components/brand";
-import { Button } from "../../app/components/ui/button";
 import { Card, CardContent } from "../../app/components/ui/card";
+import { setPendingAccessError } from "../../features/runtime/accessError";
 import { isStaleParticipantError } from "../../features/runtime/draft";
 import { useParticipantAuth } from "../../store/participantAuth";
 
@@ -47,9 +46,6 @@ function EvaluacionCodeExchangeRoute() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [errorState, setErrorState] = useState<{ code: string; message: string } | null>(null);
-  const error = errorState?.code === code ? errorState.message : null;
-
   useEffect(() => {
     let cancelled = false;
 
@@ -66,7 +62,8 @@ function EvaluacionCodeExchangeRoute() {
         void navigate({ to: "/evaluacion/sesion", replace: true });
       } catch (err) {
         if (cancelled || isStaleParticipantError(err)) return;
-        setErrorState({ code, message: mapCodeExchangeError(err) });
+        setPendingAccessError(mapCodeExchangeError(err));
+        void navigate({ to: "/evaluacion/acceso", search: {}, replace: true });
       }
     };
 
@@ -76,37 +73,6 @@ function EvaluacionCodeExchangeRoute() {
       cancelled = true;
     };
   }, [code, navigate, queryClient]);
-
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4 md:p-6">
-        <Card className="w-full max-w-md rounded-lg border border-border bg-card shadow-[var(--shadow-xs)]">
-          <CardContent className="p-6 sm:p-8 text-center space-y-5">
-            <div className="flex justify-center">
-              <Brand />
-            </div>
-
-            <Alert
-              role="alert"
-              className="border-status-danger-border bg-status-danger-bg text-status-danger-fg text-left"
-            >
-              <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
-              <AlertDescription className="text-status-danger-fg">{error}</AlertDescription>
-            </Alert>
-
-            <Button
-              type="button"
-              className="w-full h-12 px-5 gap-2 focus-visible:ring-[3px] focus-visible:ring-ring"
-              onClick={() => void navigate({ to: "/evaluacion/acceso", replace: true })}
-            >
-              <ArrowLeft className="size-4" aria-hidden="true" />
-              Ingresar código manualmente
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4 md:p-6">

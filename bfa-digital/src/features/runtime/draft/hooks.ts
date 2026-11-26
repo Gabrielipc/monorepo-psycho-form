@@ -2,7 +2,14 @@ import { useCallback, useMemo } from "react";
 import type { AnswerValue } from "../answer-value";
 import { setAnswer } from "./sync";
 import { useRuntimeDraft } from "./store";
-import type { DiscardNotice, DraftAnswer, RejectedAnswer, RejectedAnswerEntry, SyncStatus } from "./types";
+import type {
+  DiscardNotice,
+  DraftAnswer,
+  RejectedAnswer,
+  RejectedAnswerEntry,
+  SyncStatus,
+  UnconfirmedAnswerEntry,
+} from "./types";
 
 export interface UseDraftAnswerResult {
   /** Respuesta local completa (valor + versión), o `undefined` si el ítem no tiene respuesta local. */
@@ -46,6 +53,18 @@ export function useRejectedAnswers(): RejectedAnswerEntry[] {
   return useMemo(
     () => Object.entries(rejectedAnswers).map(([itemId, rejected]) => ({ itemId: Number(itemId), ...rejected })),
     [rejectedAnswers],
+  );
+}
+
+/** Respuestas que quedaron sin confirmar al vencer el tiempo de un subtest. */
+export function useUnconfirmedAnswers(): UnconfirmedAnswerEntry[] {
+  const unconfirmedAnswers = useRuntimeDraft((state) => state.unconfirmedAnswers);
+  return useMemo(
+    () =>
+      Object.entries(unconfirmedAnswers)
+        .map(([itemId, entry]) => ({ itemId: Number(itemId), ...entry }))
+        .sort((a, b) => a.recordedAt - b.recordedAt || a.itemId - b.itemId),
+    [unconfirmedAnswers],
   );
 }
 

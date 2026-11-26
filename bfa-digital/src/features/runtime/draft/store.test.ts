@@ -247,4 +247,35 @@ describe("persistencia en sessionStorage", () => {
     expect(result.restored).toBe(false);
     expect(result.discardedPending).toBe(1);
   });
+
+  it("recordUnconfirmedOnTimeout conserva respuestas pendientes del subtest en sessionStorage y las retira de queue", () => {
+    store().setAnswerLocal(1, single(10), 4, 7);
+    store().setAnswerLocal(2, single(20), 2, 8);
+    const token = getOwnerToken()!;
+
+    expect(store().recordUnconfirmedOnTimeout(token, 7, [1])).toBe(true);
+    expect(store().queue.map((e) => e.itemId)).toEqual([2]);
+    expect(store().unconfirmedAnswers[1]).toMatchObject({
+      value: single(10),
+      version: 1,
+      subtestId: 7,
+    });
+
+    // Simula recarga: también restaura unconfirmedAnswers
+    useRuntimeDraft.setState({
+      owner: null,
+      answers: {},
+      queue: [],
+      rejectedAnswers: {},
+      unconfirmedAnswers: {},
+      lastSyncAt: null,
+    });
+    const restored = store().bindOwner({ assignmentId: ASSIGNMENT_ID, attemptId: ATTEMPT_ID });
+    expect(restored.restored).toBe(true);
+    expect(store().unconfirmedAnswers[1]).toMatchObject({
+      value: single(10),
+      version: 1,
+      subtestId: 7,
+    });
+  });
 });

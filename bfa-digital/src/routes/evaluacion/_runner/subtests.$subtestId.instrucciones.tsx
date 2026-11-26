@@ -1,8 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { AlertCircle, AlertTriangle, ArrowLeft, Clock, Loader2, Play } from "lucide-react";
 
-import type { Evaluation } from "../../../api/schemas/runtime";
 import { Alert, AlertDescription, AlertTitle } from "../../../app/components/ui/alert";
 import { Brand } from "../../../app/components/brand";
 import { Button } from "../../../app/components/ui/button";
@@ -11,7 +10,7 @@ import { Separator } from "../../../app/components/ui/separator";
 import { StatusBadge } from "../../../app/components/ui/status-badge";
 import { useRunner } from "../../../features/runtime/RunnerContext";
 import { findSubtest, isSubtestOpenable } from "../../../features/runtime/machine";
-import { evaluationQueryOptions } from "../../../features/runtime/queries";
+import { ensureCurrentEvaluation } from "../../../features/runtime/queries";
 import { useParticipantAuth } from "../../../store/participantAuth";
 
 export const Route = createFileRoute("/evaluacion/_runner/subtests/$subtestId/instrucciones")({
@@ -32,12 +31,9 @@ export const Route = createFileRoute("/evaluacion/_runner/subtests/$subtestId/in
       throw redirect({ to: "/evaluacion/acceso", replace: true });
     }
 
-    let evaluation: Evaluation;
-    try {
-      evaluation = await context.queryClient.ensureQueryData(evaluationQueryOptions(assignmentId));
-    } catch {
-      return;
-    }
+    // Solo se decide con un /yo vigente (F2-FIX-6); sin confirmación se deja montar y el runner corrige después.
+    const evaluation = await ensureCurrentEvaluation(context.queryClient, assignmentId);
+    if (evaluation === null) return;
 
     if (!isSubtestOpenable(evaluation, params.subtestId)) {
       throw redirect({ to: "/evaluacion/sesion", replace: true });
@@ -67,6 +63,18 @@ function SubtestInstruccionesRoute() {
     startSubtestAction,
   } = useRunner();
 
+  const routeAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    routeAbortRef.current = controller;
+    return () => {
+      controller.abort();
+      if (routeAbortRef.current === controller) {
+        routeAbortRef.current = null;
+      }
+    };
+  }, [subtestId]);
+
   useEffect(() => {
     ensureInstructionsRoute(subtestId);
   }, [ensureInstructionsRoute, subtestId]);
@@ -91,6 +99,7 @@ function SubtestInstruccionesRoute() {
   const isResume = subtest.status === "EN_PROGRESO" || subtest.status === "INTERRUMPIDO";
 
   const handleBack = () => {
+    routeAbortRef.current?.abort();
     clearActionError();
     backToListAction();
     void navigate({ to: "/evaluacion/sesion" });
@@ -98,6 +107,8 @@ function SubtestInstruccionesRoute() {
 
   const handleStart = async () => {
     clearActionError();
+    const signal = routeAbortRef.current?.signal;
+    if (signal?.aborted) return;
     if (state.kind === "respondiendo" && state.subtestId === subtestId) {
       void navigate({
         to: "/evaluacion/subtests/$subtestId/items/$ordinal",
@@ -105,13 +116,12 @@ function SubtestInstruccionesRoute() {
       });
       return;
     }
-    const initialOrdinal = await startSubtestAction(subtestId);
-    if (initialOrdinal !== null) {
-      void navigate({
-        to: "/evaluacion/subtests/$subtestId/items/$ordinal",
-        params: { subtestId, ordinal: initialOrdinal },
-      });
-    }
+    const initialOrdinal = await startSubtestAction(subtestId, { signal });
+    if (signal?.aborted || initialOrdinal === null) return;
+    void navigate({
+      to: "/evaluacion/subtests/$subtestId/items/$ordinal",
+      params: { subtestId, ordinal: initialOrdinal },
+    });
   };
 
   return (

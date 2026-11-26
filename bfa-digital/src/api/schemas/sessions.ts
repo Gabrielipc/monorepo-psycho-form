@@ -146,6 +146,21 @@ const normalizeSentinel = (value: string | null | undefined, sentinels: readonly
   return value;
 };
 
+export const AssignmentRejectedAnswerWireSchema = z
+  .object({
+    itemId: z.number().int(),
+    code: z.string(),
+    rejectedAt: serverDateTime.nullish(),
+  })
+  .loose()
+  .transform((wire) => ({
+    itemId: wire.itemId,
+    code: wire.code,
+    rejectedAt: wire.rejectedAt ?? null,
+  }));
+
+export type AssignmentRejectedAnswer = z.output<typeof AssignmentRejectedAnswerWireSchema>;
+
 export const AssignmentWireSchema = z
   .object({
     assignmentId: z.number(),
@@ -163,22 +178,29 @@ export const AssignmentWireSchema = z
       .transform((value) => normalizeSentinel(value, ["Nunca"]))
       .pipe(serverDateTime.nullable()),
     tokenExpiraEn: serverDateTime.nullish(),
+    rejectedAnswersCount: z.number().int().min(0).nullish(),
+    rejectedAnswers: z.array(AssignmentRejectedAnswerWireSchema).nullish(),
   })
   .loose();
 
-export const AssignmentSchema = AssignmentWireSchema.transform((wire) => ({
-  assignmentId: wire.assignmentId,
-  attemptId: wire.attemptId ?? null,
-  participantId: wire.participantId,
-  participantName: wire.participantName,
-  ...(wire.participantCode != null ? { participantCode: wire.participantCode } : {}),
-  linkStatus: wire.status,
-  attemptState: wire.state,
-  currentSubtestId: normalizeSentinel(wire.currentSubtestId, ["—", "-"]),
-  progress: wire.overallProgress,
-  lastActivityAt: wire.lastActivity,
-  tokenExpiresAt: wire.tokenExpiraEn ?? null,
-}));
+export const AssignmentSchema = AssignmentWireSchema.transform((wire) => {
+  const rejectedAnswers = wire.rejectedAnswers ?? [];
+  return {
+    assignmentId: wire.assignmentId,
+    attemptId: wire.attemptId ?? null,
+    participantId: wire.participantId,
+    participantName: wire.participantName,
+    ...(wire.participantCode != null ? { participantCode: wire.participantCode } : {}),
+    linkStatus: wire.status,
+    attemptState: wire.state,
+    currentSubtestId: normalizeSentinel(wire.currentSubtestId, ["—", "-"]),
+    progress: wire.overallProgress,
+    lastActivityAt: wire.lastActivity,
+    tokenExpiresAt: wire.tokenExpiraEn ?? null,
+    rejectedAnswersCount: wire.rejectedAnswersCount ?? rejectedAnswers.length,
+    rejectedAnswers,
+  };
+});
 
 export const AssignmentListSchema = z.array(AssignmentSchema);
 

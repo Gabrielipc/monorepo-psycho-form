@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ClipboardCheck, Eye, MessageSquare, Search } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Eye, MessageSquare, Search } from "lucide-react";
 
 import type { Assignment } from "../../../api/schemas/sessions";
+import { Badge } from "../../../app/components/ui/badge";
 import { Button } from "../../../app/components/ui/button";
 import { DataTable, type DataTableColumn } from "../../../app/components/ui/data-table";
 import { EmptyState } from "../../../app/components/ui/empty-state";
@@ -51,9 +52,14 @@ export function SessionMonitorTab({ sessionId }: { sessionId: number }) {
   const [kpiFilter, setKpiFilter] = useState<KpiKey>("assigned");
   const [search, setSearch] = useState("");
   const [noteTarget, setNoteTarget] = useState<Assignment | null>(null);
+  const [rejectedTarget, setRejectedTarget] = useState<Assignment | null>(null);
 
   const assignments = useMemo(() => query.data ?? [], [query.data]);
   const kpis = useMemo(() => deriveKpis(assignments), [assignments]);
+  const totalRejectedAnswers = useMemo(
+    () => assignments.reduce((sum, a) => sum + a.rejectedAnswersCount, 0),
+    [assignments],
+  );
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return sortForMonitor(
@@ -100,7 +106,37 @@ export function SessionMonitorTab({ sessionId }: { sessionId: number }) {
     {
       id: "attemptState",
       header: "Intento",
-      cell: (a) => <StatusBadge domain="attempt" status={toAttemptStatus(a.attemptState)} />,
+      cell: (a) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <StatusBadge domain="attempt" status={toAttemptStatus(a.attemptState)} />
+          {a.rejectedAnswersCount > 0 &&
+            (a.rejectedAnswers.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setRejectedTarget(a)}
+                aria-label={`Ver ${a.rejectedAnswersCount} ${
+                  a.rejectedAnswersCount === 1 ? "respuesta rechazada" : "respuestas rechazadas"
+                } de ${a.participantName}`}
+                className="inline-flex items-center gap-1 rounded-md border border-status-danger-border bg-status-danger-bg px-2 py-0.5 text-xs font-medium text-status-danger-fg hover:opacity-90 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring cursor-pointer"
+              >
+                <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+                <span className="tabular-nums">
+                  {a.rejectedAnswersCount} {a.rejectedAnswersCount === 1 ? "rechazo" : "rechazos"}
+                </span>
+              </button>
+            ) : (
+              <Badge
+                variant="outline"
+                className="border-status-danger-border bg-status-danger-bg text-status-danger-fg"
+              >
+                <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+                <span className="tabular-nums">
+                  {a.rejectedAnswersCount} {a.rejectedAnswersCount === 1 ? "rechazo" : "rechazos"}
+                </span>
+              </Badge>
+            ))}
+        </div>
+      ),
     },
     {
       id: "linkStatus",
@@ -177,6 +213,18 @@ export function SessionMonitorTab({ sessionId }: { sessionId: number }) {
             aria-label="Avance global de la sesión"
           />
           <span>{progressPercent}%</span>
+          {totalRejectedAnswers > 0 && (
+            <Badge
+              variant="outline"
+              className="border-status-danger-border bg-status-danger-bg text-status-danger-fg"
+            >
+              <AlertTriangle className="size-3 shrink-0" aria-hidden="true" />
+              <span className="tabular-nums">
+                {totalRejectedAnswers}{" "}
+                {totalRejectedAnswers === 1 ? "respuesta rechazada" : "respuestas rechazadas"}
+              </span>
+            </Badge>
+          )}
           {query.dataUpdatedAt > 0 && <span>Actualizado {formatTime(new Date(query.dataUpdatedAt).toISOString())}</span>}
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -259,6 +307,40 @@ export function SessionMonitorTab({ sessionId }: { sessionId: number }) {
           </div>
         }
       />
+
+      <Dialog open={rejectedTarget !== null} onOpenChange={(open) => !open && setRejectedTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Respuestas rechazadas de {rejectedTarget?.participantName}</DialogTitle>
+            <DialogDescription>
+              Respuestas que el servidor rechazó definitivamente durante la aplicación.
+            </DialogDescription>
+          </DialogHeader>
+          {rejectedTarget && (
+            <ul className="space-y-2 text-sm">
+              {rejectedTarget.rejectedAnswers.map((entry, idx) => (
+                <li
+                  key={`${entry.itemId}-${entry.code}-${idx}`}
+                  className="flex items-center justify-between gap-3 rounded-md border border-status-danger-border bg-status-danger-bg px-3 py-2 text-status-danger-fg"
+                >
+                  <div>
+                    <span className="font-semibold">Ítem #{entry.itemId}</span>
+                    <span className="mx-1.5" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="font-mono text-xs">{entry.code}</span>
+                  </div>
+                  {entry.rejectedAt && (
+                    <time dateTime={entry.rejectedAt} className="text-xs tabular-nums">
+                      {formatTime(entry.rejectedAt)}
+                    </time>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={noteTarget !== null} onOpenChange={(open) => !open && setNoteTarget(null)}>
         <DialogContent>
