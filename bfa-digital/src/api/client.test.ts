@@ -307,6 +307,63 @@ describe("token enviado y 401 tardío", () => {
   });
 });
 
+describe("401 de una petición obsoleta (isStillRelevant, F2-FIX-7)", () => {
+  it("con isStillRelevant() === false un 401 del participante NO limpia la sesión ni navega; el error sube", async () => {
+    setNavigator(navigate, () => "/evaluacion/subtests/10/items/1");
+    useParticipantAuth.getState().setSession({ token: "participant-jwt", assignmentId: 42 });
+    server.use(http.get(`${API}/yo-obsoleto`, () => HttpResponse.json({ success: false }, { status: 401 })));
+
+    const error = (await participantClient
+      .get("/yo-obsoleto", { isStillRelevant: () => false })
+      .catch((e: unknown) => e)) as ApiError;
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(401);
+    expect(useParticipantAuth.getState().token).toBe("participant-jwt");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("con isStillRelevant() === true (o sin predicado) un 401 del participante se comporta como siempre: limpia y navega a acceso", async () => {
+    setNavigator(navigate, () => "/evaluacion/subtests/10/items/1");
+    server.use(http.get(`${API}/yo-vigente`, () => HttpResponse.json({ success: false }, { status: 401 })));
+
+    useParticipantAuth.getState().setSession({ token: "participant-jwt", assignmentId: 42 });
+    await participantClient.get("/yo-vigente", { isStillRelevant: () => true }).catch(() => undefined);
+    expect(useParticipantAuth.getState().token).toBeNull();
+    expect(navigate).toHaveBeenCalledWith({ to: "/evaluacion/acceso", replace: true });
+
+    navigate.mockReset();
+    useParticipantAuth.getState().setSession({ token: "participant-jwt-2", assignmentId: 42 });
+    await participantClient.get("/yo-vigente").catch(() => undefined);
+    expect(useParticipantAuth.getState().token).toBeNull();
+    expect(navigate).toHaveBeenCalledWith({ to: "/evaluacion/acceso", replace: true });
+  });
+
+  it("el predicado se consulta al volver la respuesta (no al emitir la petición)", async () => {
+    setNavigator(navigate, () => "/evaluacion/sesion");
+    useParticipantAuth.getState().setSession({ token: "participant-jwt", assignmentId: 42 });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get(`${API}/yo-lento`, async () => {
+        await gate;
+        return HttpResponse.json({ success: false }, { status: 401 });
+      }),
+    );
+    let relevant = true;
+    const pending = participantClient.get("/yo-lento", { isStillRelevant: () => relevant }).catch((e: unknown) => e);
+    await delay(10);
+    relevant = false; // p. ej. se ocultó la pestaña mientras volaba
+    release();
+
+    expect(((await pending) as ApiError).status).toBe(401);
+    expect(useParticipantAuth.getState().token).toBe("participant-jwt");
+    expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
 describe("403 en staff", () => {
   const forbidden = () =>
     HttpResponse.json({ success: false, error: { code: "FORBIDDEN", message: "Sin permiso" } }, { status: 403 });

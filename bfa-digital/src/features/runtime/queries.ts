@@ -53,7 +53,13 @@ export async function ensureCurrentEvaluation(
   }
   if (isTicketCurrent(cached)) return cached;
   try {
-    const fresh = await queryClient.fetchQuery({ ...evaluationQueryOptions(assignmentId), staleTime: 0 });
+    // `retry: false` (F2-FIX-7): el loader hace UN solo refetch; los dos reintentos globales de producción lo
+    // convertirían en hasta tres solicitudes y retrasarían la navegación.
+    const fresh = await queryClient.fetchQuery({
+      ...evaluationQueryOptions(assignmentId),
+      staleTime: 0,
+      retry: false,
+    });
     return isTicketCurrent(fresh) ? fresh : null;
   } catch {
     return null;

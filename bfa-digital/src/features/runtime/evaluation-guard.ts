@@ -110,7 +110,9 @@ export async function fetchEvaluationWithTicket(): Promise<Evaluation> {
   ensureVisibilityListener();
   const ticket = evaluationGuard.startRequest();
   try {
-    const evaluation = await getEvaluation();
+    // F2-FIX-7: si el ticket se invalida con la solicitud en vuelo (pestaña oculta), un 401 tardío con el mismo JWT NO
+    // debe cerrar la sesión del participante: el interceptor consulta este predicado antes de limpiar o navegar.
+    const evaluation = await getEvaluation({ isStillRelevant: () => evaluationGuard.isCurrent(ticket) });
     evaluationGuard.register(evaluation, ticket);
     return evaluation;
   } catch (err) {

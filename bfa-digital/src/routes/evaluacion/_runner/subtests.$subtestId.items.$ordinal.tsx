@@ -39,6 +39,7 @@ import {
   isSubtestOpenable,
   isValidOrdinal,
 } from "../../../features/runtime/machine";
+import { isTicketCurrent } from "../../../features/runtime/evaluation-guard";
 import { ensureCurrentEvaluation, subtestItemsQueryOptions } from "../../../features/runtime/queries";
 import { AnswerRenderer } from "../../../features/runtime/renderers";
 import { useParticipantAuth } from "../../../store/participantAuth";
@@ -91,6 +92,10 @@ export const Route = createFileRoute("/evaluacion/_runner/subtests/$subtestId/it
         return;
       }
     }
+
+    // El await de los ítems pudo durar lo suficiente para que el /yo con el que se decide quedara invalidado
+    // (pestaña oculta, cambio de dueño): sin ticket vigente NO se corrige el ordinal (F2-FIX-7).
+    if (!isTicketCurrent(evaluation)) return;
 
     if (items.length > 0 && !isValidOrdinal(params.ordinal, items.length)) {
       throw redirect({
@@ -178,8 +183,10 @@ function SubtestItemRunnerRoute() {
   const currentItem = items[safeOrdinal - 1];
   const nextItem = items[safeOrdinal];
 
-  // Si llegó a un ordinal fuera de rango después de cargar ítems, normaliza la URL.
+  // Si llegó a un ordinal fuera de rango después de cargar ítems, normaliza la URL. Solo decide con una evaluación
+  // vigente (F2-FIX-7); si no lo está, espera el siguiente /yo vigente (cambia `evaluation` y el efecto se repite).
   useEffect(() => {
+    if (!isTicketCurrent(evaluation)) return;
     if (totalItems > 0 && ordinal !== safeOrdinal) {
       void navigate({
         to: "/evaluacion/subtests/$subtestId/items/$ordinal",
@@ -187,7 +194,7 @@ function SubtestItemRunnerRoute() {
         replace: true,
       });
     }
-  }, [totalItems, ordinal, safeOrdinal, subtestId, navigate]);
+  }, [evaluation, totalItems, ordinal, safeOrdinal, subtestId, navigate]);
 
   // Recuperación tras recarga o sincronización de ordinal con la máquina
   useEffect(() => {
@@ -199,8 +206,11 @@ function SubtestItemRunnerRoute() {
   }, [ensureItemsRoute, subtestId, safeOrdinal, state.kind]);
 
   // Redirección reactiva si el polling cierra/anula el subtest abierto o cambia de fase
+  // Solo decide con una evaluación vigente (F2-FIX-7): un /yo invalidado (pestaña oculta) no desvía; se espera el
+  // siguiente /yo vigente.
   useEffect(() => {
     if (!evaluation) return;
+    if (!isTicketCurrent(evaluation)) return;
     if (
       state.kind === "pausada" ||
       state.kind === "bloqueado" ||

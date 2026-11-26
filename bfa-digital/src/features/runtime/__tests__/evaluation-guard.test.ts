@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { createEvaluationGuard, evaluationGuard, isTicketCurrent } from "../evaluation-guard";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { delay, http, HttpResponse } from "msw";
+import { setNavigator } from "../../../api/client";
+import { ApiError } from "../../../api/errors";
+import { useParticipantAuth } from "../../../store/participantAuth";
+import { server } from "../../../test/msw/server";
+import {
+  createEvaluationGuard,
+  evaluationGuard,
+  fetchEvaluationWithTicket,
+  isTicketCurrent,
+} from "../evaluation-guard";
 
 describe("evaluation-guard (F2-FIX-4)", () => {
   it("una solicitud vieja que llega DESPUÉS de una nueva ya aplicada no es vigente (orden de inicio, no de llegada)", () => {
@@ -68,5 +78,62 @@ describe("isTicketCurrent (F2-FIX-6)", () => {
     const later = { assignmentId: 42 };
     evaluationGuard.register(later, evaluationGuard.startRequest());
     expect(isTicketCurrent(later)).toBe(true);
+  });
+});
+
+describe("401 de un /yo invalidado (F2-FIX-7)", () => {
+  const API = "http://localhost:8080";
+  const navigate = vi.fn();
+
+  beforeEach(() => {
+    navigate.mockReset();
+    setNavigator(navigate, () => "/evaluacion/subtests/10/items/1");
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+  });
+  afterEach(() => {
+    setNavigator(null);
+    useParticipantAuth.getState().clear();
+  });
+
+  async function yoWith401(invalidateBeforeResponse: boolean) {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    server.use(
+      http.get(`${API}/evaluacion-participante/yo`, async () => {
+        started = true;
+        await gate;
+        return HttpResponse.json(
+          { success: false, data: null, error: { code: "NO_AUTORIZADO", message: "x" }, correlationId: "c" },
+          { status: 401 },
+        );
+      }),
+    );
+    const pending = fetchEvaluationWithTicket().catch((e: unknown) => e);
+    while (!started) await delay(5);
+    // Se oculta la pestaña con el /yo en vuelo; la respuesta llega después con 401 y el MISMO JWT.
+    if (invalidateBeforeResponse) evaluationGuard.invalidateForVisibility();
+    release();
+    return (await pending) as ApiError;
+  }
+
+  it("un 401 de un /yo cuyo ticket fue invalidado NO cierra la sesión ni navega; el error queda asociado a su ticket (el guard lo descarta)", async () => {
+    const error = await yoWith401(true);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(401);
+    expect(useParticipantAuth.getState().token).toBe("jwt-42");
+    expect(navigate).not.toHaveBeenCalled();
+    expect(isTicketCurrent(error)).toBe(false);
+  });
+
+  it("sin regresión · un 401 de un /yo VIGENTE sigue cerrando la sesión y navegando a acceso", async () => {
+    const error = await yoWith401(false);
+
+    expect(error.status).toBe(401);
+    expect(useParticipantAuth.getState().token).toBeNull();
+    expect(navigate).toHaveBeenCalledWith({ to: "/evaluacion/acceso", replace: true });
   });
 });

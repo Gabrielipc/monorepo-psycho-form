@@ -2731,4 +2731,149 @@ describe("Runner del participante (R-04)", () => {
       expect(invalidate).toHaveBeenCalledTimes(1);
     });
   });
+  // ---------------------------------------------------------------------------------------------
+  // F2-FIX-7 · las guardas reactivas y el loader solo deciden con un /yo vigente
+  // ---------------------------------------------------------------------------------------------
+  describe("F2-FIX-7", () => {
+    const fakeClock = () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(FAKE_T0);
+    };
+    const advanceInSteps = async (totalMs: number, stepMs = 500) => {
+      for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(stepMs);
+        });
+      }
+    };
+    const ITEM_PATH = "/evaluacion/subtests/10/items/1";
+    const INSTRUCTIONS_PATH = "/evaluacion/subtests/10/instrucciones";
+    const inProgress = (extra: Partial<SubtestWire> = {}) =>
+      makeEvaluationWire({
+        subtests: [
+          makeSubtestWire(10, 1, "EN_PROGRESO", {
+            timeLimitSeconds: 600,
+            startedAt: "2026-11-25T11:55:00.000Z",
+            ...liveTiming(500),
+            paused: false,
+            ...extra,
+          }),
+        ],
+      });
+    const unavailable = () => apiErr(503, "SERVICE_UNAVAILABLE", "Servicio no disponible");
+    const newQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 5 * 60_000 } } });
+
+    /** Oculta la pestaña (invalida los /yo ya aplicados). */
+    const hideTab = (visibility: ReturnType<typeof vi.spyOn>) => {
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    const showTab = (visibility: ReturnType<typeof vi.spyOn>) => {
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    it("MEDIO 2 · ruta de ítems montada con un NO_INICIADO ya aplicado: si se oculta la pestaña y el /yo del loader falla (503), el efecto NO desvía a instrucciones con el /yo obsoleto; el /yo vigente EN_PROGRESO deja al participante en el ítem", async () => {
+      fakeClock();
+      useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+      let mode: "not-started" | "fail" | "in-progress" = "not-started";
+      server.use(
+        http.get(`${API}/evaluacion-participante/yo`, () => {
+          if (mode === "fail") return unavailable();
+          if (mode === "in-progress") return ok(inProgress());
+          return ok(makeEvaluationWire({ subtests: [makeSubtestWire(10, 1, "NO_INICIADO")] }));
+        }),
+      );
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      const { router } = await renderRunnerAt("/evaluacion/sesion", newQueryClient());
+      await advanceInSteps(1_000);
+      expect(await screen.findByText("Subtest 10")).toBeInTheDocument();
+
+      // NO_INICIADO ya aplicado; se oculta la pestaña y el /yo del loader al navegar al ítem devuelve 503.
+      hideTab(visibility);
+      mode = "fail";
+      void router.navigate({ to: "/evaluacion/subtests/$subtestId/items/$ordinal", params: { subtestId: 10, ordinal: 1 } });
+      await advanceInSteps(2_000);
+      expect(router.state.location.pathname).toBe(ITEM_PATH);
+
+      // Vuelve la pestaña y el /yo vigente confirma EN_PROGRESO: sigue en el ítem.
+      mode = "in-progress";
+      showTab(visibility);
+      await advanceInSteps(15_000);
+      expect(router.state.location.pathname).toBe(ITEM_PATH);
+      expect(await screen.findByText("Pregunta 1 del subtest 10")).toBeInTheDocument();
+    });
+
+    it("MEDIO 2 · ruta de instrucciones montada con un subtest ya completado (obsoleto): el efecto NO desvía a la lista con el /yo invalidado; el /yo vigente lo deja abrible y sigue en instrucciones", async () => {
+      fakeClock();
+      useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+      let mode: "done" | "fail" | "open" = "done";
+      server.use(
+        http.get(`${API}/evaluacion-participante/yo`, () => {
+          if (mode === "fail") return unavailable();
+          return ok(
+            makeEvaluationWire({
+              subtests: [
+                makeSubtestWire(10, 1, mode === "open" ? "NO_INICIADO" : "COMPLETADO"),
+                makeSubtestWire(20, 2, "NO_INICIADO"),
+              ],
+            }),
+          );
+        }),
+      );
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      const { router } = await renderRunnerAt("/evaluacion/sesion", newQueryClient());
+      await advanceInSteps(1_000);
+      expect(await screen.findByText("Subtest 20")).toBeInTheDocument();
+
+      hideTab(visibility);
+      mode = "fail";
+      void router.navigate({ to: "/evaluacion/subtests/$subtestId/instrucciones", params: { subtestId: 10 } });
+      await advanceInSteps(2_000);
+      expect(router.state.location.pathname).toBe(INSTRUCTIONS_PATH);
+
+      mode = "open";
+      showTab(visibility);
+      await advanceInSteps(15_000);
+      expect(router.state.location.pathname).toBe(INSTRUCTIONS_PATH);
+      expect(await screen.findByRole("heading", { name: "Subtest 10" })).toBeInTheDocument();
+    });
+
+    it("MEDIO 4 · el loader NO corrige el ordinal si el /yo con el que decide se invalidó mientras esperaba los ítems; el ordinal se corrige después con el /yo vigente", async () => {
+      fakeClock();
+      useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+      let itemsRequested = false;
+      let releaseItems: () => void = () => undefined;
+      const itemsGate = new Promise<void>((resolve) => {
+        releaseItems = resolve;
+      });
+      server.use(
+        http.get(`${API}/evaluacion-participante/yo`, () => ok(inProgress({ items: [] }))),
+        http.get(`${API}/intentos/101/subtests/10/items`, async () => {
+          itemsRequested = true;
+          await itemsGate;
+          return ok(makeSubtestWire(10, 1, "EN_PROGRESO"));
+        }),
+      );
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      const rendering = renderRunnerAt("/evaluacion/subtests/10/items/100", newQueryClient());
+      await waitFor(() => expect(itemsRequested).toBe(true));
+
+      // Se oculta la pestaña mientras se esperan los ítems; llegan 2 ítems y el ordinal 100 queda fuera de rango.
+      hideTab(visibility);
+      await act(async () => {
+        releaseItems();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      const { router } = await rendering;
+      await advanceInSteps(1_000);
+      expect(router.state.location.pathname).toBe("/evaluacion/subtests/10/items/100");
+
+      // Vuelve la pestaña: con el /yo vigente se normaliza el ordinal.
+      showTab(visibility);
+      await advanceInSteps(15_000);
+      expect(router.state.location.pathname).toBe("/evaluacion/subtests/10/items/2");
+      expect(await screen.findByText("Pregunta 2 del subtest 10")).toBeInTheDocument();
+    });
+  });
 });

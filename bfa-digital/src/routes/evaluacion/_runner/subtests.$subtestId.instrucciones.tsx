@@ -10,6 +10,7 @@ import { Separator } from "../../../app/components/ui/separator";
 import { StatusBadge } from "../../../app/components/ui/status-badge";
 import { useRunner } from "../../../features/runtime/RunnerContext";
 import { findSubtest, isSubtestOpenable } from "../../../features/runtime/machine";
+import { isTicketCurrent } from "../../../features/runtime/evaluation-guard";
 import { ensureCurrentEvaluation } from "../../../features/runtime/queries";
 import { useParticipantAuth } from "../../../store/participantAuth";
 
@@ -79,8 +80,10 @@ function SubtestInstruccionesRoute() {
     ensureInstructionsRoute(subtestId);
   }, [ensureInstructionsRoute, subtestId]);
 
+  // Solo decide con una evaluación vigente (F2-FIX-7); si no lo está, espera el siguiente /yo vigente.
   useEffect(() => {
     if (!evaluation) return;
+    if (!isTicketCurrent(evaluation)) return;
     if (state.kind === "pausada" || state.kind === "bloqueado") return;
     if (
       !isSubtestOpenable(evaluation, subtestId) ||

@@ -55,6 +55,12 @@ declare module "axios" {
     metadata?: { sentToken: string | null };
     /** Desactiva el toast automático de 403 (staff, métodos no-GET). */
     silent403?: boolean;
+    /**
+     * Predicado opcional que fija quien emite la petición (F2-FIX-7): si al volver con 401 devuelve `false`, la
+     * respuesta quedó obsoleta para quien la pidió y el interceptor NO cierra la sesión ni navega; el error sube y
+     * quien emitió la petición lo descarta. Mantiene `api/` desacoplado de `features/`.
+     */
+    isStillRelevant?: () => boolean;
   }
 }
 
@@ -108,7 +114,10 @@ export function createApiClient(
         // Solo si la petición salió con el token vigente: si la sesión cambió mientras
         // volaba, el 401 pertenece a la sesión anterior y se rechaza sin limpiar.
         const sentToken = config?.metadata?.sentToken ?? null;
-        if (!isCredentialUrl(config?.url) && sentToken === getToken()) onUnauthorized(sentToken);
+        // Si quien emitió la petición ya la considera obsoleta (`isStillRelevant() === false`), el 401 no cierra la
+        // sesión: el error sube y el emisor lo descarta.
+        const stillRelevant = config?.isStillRelevant?.() ?? true;
+        if (!isCredentialUrl(config?.url) && sentToken === getToken() && stillRelevant) onUnauthorized(sentToken);
       }
       // 403: la sesión es válida pero sin permiso. NO se hace logout; se avisa al usuario
       // una sola vez por petición (el interceptor corre una vez) si fue una acción de escritura.
