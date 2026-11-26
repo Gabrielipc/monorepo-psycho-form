@@ -985,6 +985,44 @@ describe("Runner del participante (R-04)", () => {
     expect(screen.queryByRole("button", { name: /finalizar|enviar|responder/i })).not.toBeInTheDocument();
   });
 
+  it("recarga tras entregar y cierre de sesión: 409 SESION_FINALIZADA con marcador muestra «Evaluación entregada»", async () => {
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+    sessionStorage.setItem("bfa-runtime-delivered:42", "1");
+    server.use(
+      http.get(`${API}/evaluacion-participante/yo`, () => apiErr(409, "SESION_FINALIZADA", "Sesión finalizada")),
+    );
+
+    await renderRunnerAt("/evaluacion/sesion");
+    expect(await screen.findByRole("heading", { name: "Evaluación entregada" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /sesión finalizada/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /finalizar|enviar|responder/i })).not.toBeInTheDocument();
+  });
+
+  it("409 SESION_FINALIZADA sin marcador sigue mostrando «Sesión finalizada»", async () => {
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+    server.use(
+      http.get(`${API}/evaluacion-participante/yo`, () => apiErr(409, "SESION_FINALIZADA", "Sesión finalizada")),
+    );
+
+    await renderRunnerAt("/evaluacion/sesion");
+    expect(await screen.findByRole("heading", { name: "Sesión finalizada" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Evaluación entregada" })).not.toBeInTheDocument();
+  });
+
+  it("marcador con respuestas sin confirmar muestra advertencia en «Evaluación entregada»", async () => {
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+    sessionStorage.setItem("bfa-runtime-delivered:42", "1:pendientes");
+    server.use(
+      http.get(`${API}/evaluacion-participante/yo`, () => apiErr(409, "SESION_FINALIZADA", "Sesión finalizada")),
+    );
+
+    await renderRunnerAt("/evaluacion/sesion");
+    expect(await screen.findByRole("heading", { name: "Evaluación entregada" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/sin confirmar/i);
+    expect(screen.queryByText(/quedaron registradas/i)).not.toBeInTheDocument();
+  });
+
   it("409 ASIGNACION_NO_OPERABLE sin marcador (o de otra asignación) muestra el texto honesto de bloqueo", async () => {
     useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
     sessionStorage.setItem("bfa-runtime-delivered:99", "1");

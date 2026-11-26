@@ -1147,6 +1147,16 @@ describe("SERVER_ERROR: todos los códigos", () => {
     expect(next.reason).toBe("evaluacionEntregada");
   });
 
+  it("SESION_FINALIZADA con delivered=true bloquea como evaluacionEntregada; sin él, sesionCerrada", () => {
+    const next = expectKind(
+      reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "SESION_FINALIZADA", clientNow: T0, delivered: true }),
+      "bloqueado",
+    );
+    expect(next.reason).toBe("evaluacionEntregada");
+    const plain = expectKind(reduce(STATES.listaSubtests, err("SESION_FINALIZADA")), "bloqueado");
+    expect(plain.reason).toBe("sesionCerrada");
+  });
+
   it("delivered=true no altera otros códigos de bloqueo", () => {
     const next = expectKind(
       reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "TOKEN_EXPIRADO", clientNow: T0, delivered: true }),

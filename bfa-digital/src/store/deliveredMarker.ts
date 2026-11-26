@@ -16,9 +16,16 @@ const getStorage = (): Storage | null => {
 
 export const deliveredMarkerKey = (assignmentId: number): string => `${DELIVERED_MARKER_PREFIX}${assignmentId}`;
 
-export function markDelivered(assignmentId: number): void {
+/** Valores del marcador: "1" = entregada; "1:pendientes" = entregada con respuestas sin confirmar (marcadores antiguos: "1"). */
+const MARKER_DELIVERED = "1";
+const MARKER_DELIVERED_UNCONFIRMED = "1:pendientes";
+
+export function markDelivered(assignmentId: number, options?: { hadUnconfirmed?: boolean }): void {
   try {
-    getStorage()?.setItem(deliveredMarkerKey(assignmentId), "1");
+    getStorage()?.setItem(
+      deliveredMarkerKey(assignmentId),
+      options?.hadUnconfirmed ? MARKER_DELIVERED_UNCONFIRMED : MARKER_DELIVERED,
+    );
   } catch {
     // sin storage disponible: no hay marcador
   }
@@ -27,7 +34,18 @@ export function markDelivered(assignmentId: number): void {
 export function isDelivered(assignmentId: number | null): boolean {
   if (assignmentId === null) return false;
   try {
-    return getStorage()?.getItem(deliveredMarkerKey(assignmentId)) === "1";
+    const value = getStorage()?.getItem(deliveredMarkerKey(assignmentId));
+    return value === MARKER_DELIVERED || value === MARKER_DELIVERED_UNCONFIRMED;
+  } catch {
+    return false;
+  }
+}
+
+/** true si al entregar quedaban respuestas sin confirmar o rechazadas (bandera guardada en el marcador). */
+export function deliveredHadUnconfirmed(assignmentId: number | null): boolean {
+  if (assignmentId === null) return false;
+  try {
+    return getStorage()?.getItem(deliveredMarkerKey(assignmentId)) === MARKER_DELIVERED_UNCONFIRMED;
   } catch {
     return false;
   }

@@ -234,7 +234,7 @@ export type RunnerEvent =
       readonly type: "SERVER_ERROR";
       readonly code: RuntimeErrorCode;
       readonly clientNow: number;
-      /** Solo con ASIGNACION_NO_OPERABLE: existe el marcador local de que el finalizar fue confirmado. */
+      /** Solo con ASIGNACION_NO_OPERABLE o SESION_FINALIZADA: existe el marcador local de que el finalizar fue confirmado. */
       readonly delivered?: boolean;
     }
   /** El acceso fue revocado (401/403 de la audiencia participante). */
@@ -622,7 +622,7 @@ function onServerError(
     case "SESION_NO_ABIERTA":
       return blocked(state, "sesionNoAbierta");
     case "SESION_FINALIZADA":
-      return blocked(state, "sesionCerrada");
+      return blocked(state, delivered ? "evaluacionEntregada" : "sesionCerrada");
     case "TOKEN_EXPIRADO":
       return blocked(state, "expirado");
     case "ASIGNACION_NO_OPERABLE":

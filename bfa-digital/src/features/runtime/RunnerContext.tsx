@@ -72,9 +72,11 @@ import { evaluationQueryOptions, runtimeKeys, subtestItemsQueryOptions } from ".
 
 const DEFAULT_POLLING_INTERVAL_MS = 10_000;
 
-/** Evento SERVER_ERROR; con ASIGNACION_NO_OPERABLE añade si hay marcador de entrega de la asignación vigente. */
+/** Evento SERVER_ERROR; con ASIGNACION_NO_OPERABLE o SESION_FINALIZADA añade si hay marcador de entrega de la asignación vigente. */
 function serverErrorEvent(code: RuntimeErrorCode): RunnerEvent {
-  const delivered = code === "ASIGNACION_NO_OPERABLE" && isDelivered(useParticipantAuth.getState().assignmentId);
+  const delivered =
+    (code === "ASIGNACION_NO_OPERABLE" || code === "SESION_FINALIZADA") &&
+    isDelivered(useParticipantAuth.getState().assignmentId);
   return { type: "SERVER_ERROR", code, clientNow: monoNow(), ...(delivered ? { delivered: true } : {}) };
 }
 /** Retraso SOLO del envío por red del texto abierto; el draft local se actualiza en cada tecla. */
@@ -1359,7 +1361,7 @@ export function RunnerProvider({
         runtimeKeys.evaluation(capturedAssignmentId),
         (prev) => (prev ? inheritEvaluationTicket<Evaluation>(prev, { ...prev, attemptStatus: "COMPLETADO" }) : prev),
       );
-      markDelivered(capturedAssignmentId);
+      markDelivered(capturedAssignmentId, { hadUnconfirmed: unconfirmedSnap.length > 0 || rejectedSnap.length > 0 });
       clearRuntimeDraft();
       dispatch({ type: "FINISH_ATTEMPT_OK" });
       return true;

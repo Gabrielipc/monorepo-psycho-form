@@ -11,6 +11,7 @@ import { StatusBadge } from "../../app/components/ui/status-badge";
 import { RunnerProvider, useRunner } from "../../features/runtime/RunnerContext";
 import { useDiscardNotice } from "../../features/runtime/draft";
 import type { BlockReason } from "../../features/runtime/machine";
+import { deliveredHadUnconfirmed } from "../../store/deliveredMarker";
 import { useParticipantAuth } from "../../store/participantAuth";
 
 export const Route = createFileRoute("/evaluacion/_runner")({
@@ -65,7 +66,7 @@ const BLOCK_MESSAGES: Record<BlockReason, { title: string; description: string }
   evaluacionEntregada: {
     title: "Evaluación entregada",
     description:
-      "Ya entregaste esta evaluación y tus respuestas quedaron registradas. No es posible modificarlas. Puedes cerrar esta ventana.",
+      "Tu evaluación fue entregada. Si tienes dudas sobre tus respuestas, consulta al aplicador. No es posible modificarlas. Puedes cerrar esta ventana.",
   },
 };
 
@@ -101,6 +102,7 @@ function DiscardNoticeBanner() {
 
 function RunnerShell() {
   const navigate = useNavigate();
+  const assignmentId = useParticipantAuth((s) => s.assignmentId);
   const { state, evaluation, remainingTimeMs, evaluationError, refetchEvaluation } = useRunner();
 
   useEffect(() => {
@@ -256,6 +258,20 @@ function RunnerShell() {
                 <h1 className="text-xl font-semibold tracking-tight text-foreground">{info.title}</h1>
                 <p className="text-sm text-muted-foreground leading-relaxed">{info.description}</p>
               </div>
+
+              {state.reason === "evaluacionEntregada" && deliveredHadUnconfirmed(assignmentId) && (
+                <Alert
+                  role="alert"
+                  className="border-status-warning-border bg-status-warning-bg text-status-warning-fg text-left"
+                >
+                  <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+                  <AlertTitle>Algunas respuestas pudieron no sincronizarse</AlertTitle>
+                  <AlertDescription className="text-status-warning-fg text-xs">
+                    Al entregar quedaban respuestas sin confirmar en el servidor. Avisa al aplicador para que verifique
+                    tus respuestas.
+                  </AlertDescription>
+                </Alert>
+              )}
 
               <Button
                 type="button"
