@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, useRouterState } from "@tanstack/react-router";
 import { requireRoutePermission } from "../../store/routePermissions";
-import { InstrumentBuilderScreen } from "../../app/components/instruments/instrument-builder";
+import { InstrumentList } from "../../features/instruments/versions/InstrumentList";
 
 export const Route = createFileRoute("/app/instrumentos")({
   beforeLoad: requireRoutePermission("/app/instrumentos"),
@@ -13,5 +13,5 @@ function InstrumentosRoute() {
   if (pathname !== "/app/instrumentos") {
     return <Outlet />;
   }
-  return <InstrumentBuilderScreen />;
+  return <InstrumentList />;
 }

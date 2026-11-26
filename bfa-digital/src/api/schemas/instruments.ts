@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { serverDateTime } from "./datetime";
 
 // ---------------------------------------------------------------------------
 // Enums canónicos del backend (psychoform/instrument/model/*)
@@ -106,7 +107,7 @@ export const TestInstrumentWireSchema = z
     descripcion: z.string().nullish(),
     creadoPorId: z.string().nullish(),
     estado: GeneralStatusSchema,
-    creadoEn: z.string(),
+    creadoEn: serverDateTime,
   })
   .loose()
   .transform((wire) => ({
@@ -134,10 +135,10 @@ export const TestVersionWireSchema = z
     permiteAleatorizarSubtests: z.boolean(),
     permiteAleatorizarItems: z.boolean(),
     aprobadoPorId: z.string().nullish(),
-    aprobadoEn: z.string().nullish(),
-    publicadoEn: z.string().nullish(),
+    aprobadoEn: serverDateTime.nullish(),
+    publicadoEn: serverDateTime.nullish(),
     creadoPorId: z.string().nullish(),
-    creadoEn: z.string(),
+    creadoEn: serverDateTime,
   })
   .loose()
   .transform((wire) => ({
@@ -476,7 +477,7 @@ export const ScoringStrategyWireSchema = z
     activa: z.boolean(),
     requiereRevisionManual: z.boolean(),
     permiteBaremo: z.boolean(),
-    fechaCreacion: z.string(),
+    fechaCreacion: serverDateTime,
   })
   .loose()
   .transform((wire) => ({
@@ -508,9 +509,9 @@ export const ScoringRuleWireSchema = z
     parametros: z.string(),
     observacion: z.string().nullish(),
     creadoPorId: z.string().nullish(),
-    creadoEn: z.string(),
+    creadoEn: serverDateTime,
     aprobadoPorId: z.string().nullish(),
-    aprobadoEn: z.string().nullish(),
+    aprobadoEn: serverDateTime.nullish(),
   })
   .loose()
   .transform((wire) => ({
@@ -546,7 +547,7 @@ export const AnswerKeyWireSchema = z
     puntaje: z.number(),
     requiereRevisionManual: z.boolean(),
     creadoPorId: z.string().nullish(),
-    creadoEn: z.string(),
+    creadoEn: serverDateTime,
   })
   .loose()
   .transform((wire) => ({
@@ -583,9 +584,9 @@ export const BaremoWireSchema = z
     vigenteHasta: z.string().nullish(),
     estado: ConfigurationStatusSchema,
     creadoPorId: z.string().nullish(),
-    creadoEn: z.string(),
+    creadoEn: serverDateTime,
     aprobadoPorId: z.string().nullish(),
-    aprobadoEn: z.string().nullish(),
+    aprobadoEn: serverDateTime.nullish(),
   })
   .loose()
   .transform((wire) => ({
