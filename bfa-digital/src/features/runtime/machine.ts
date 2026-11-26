@@ -81,7 +81,9 @@ export type BlockReason =
   | "sesionNoAbierta"
   | "accesoRevocado"
   | "expirado"
-  | "asignacionNoOperable";
+  | "asignacionNoOperable"
+  /** 409 ASIGNACION_NO_OPERABLE con marcador local de entrega confirmada por el servidor. */
+  | "evaluacionEntregada";
 
 export type FinishReason = "usuario" | "tiempo";
 
@@ -228,7 +230,13 @@ export type RunnerEvent =
   /** Cambio de estado de la sesión detectado por el cliente (p. ej. polling ligero). */
   | { readonly type: "SESSION_STATUS_CHANGED"; readonly status: SessionStatus; readonly clientNow: number }
   /** 409 de bloqueo del backend (`isRuntimeBlocked`). */
-  | { readonly type: "SERVER_ERROR"; readonly code: RuntimeErrorCode; readonly clientNow: number }
+  | {
+      readonly type: "SERVER_ERROR";
+      readonly code: RuntimeErrorCode;
+      readonly clientNow: number;
+      /** Solo con ASIGNACION_NO_OPERABLE: existe el marcador local de que el finalizar fue confirmado. */
+      readonly delivered?: boolean;
+    }
   /** El acceso fue revocado (401/403 de la audiencia participante). */
   | { readonly type: "ACCESS_REVOKED" };
 
@@ -600,7 +608,12 @@ function onEvaluationLoaded(
   return sessionPaused ? pause(refreshed, clientNow, evaluation.pausedAt ?? null) : refreshed;
 }
 
-function onServerError(state: RunnerState, code: RuntimeErrorCode, clientNow: number): RunnerState | null {
+function onServerError(
+  state: RunnerState,
+  code: RuntimeErrorCode,
+  clientNow: number,
+  delivered = false,
+): RunnerState | null {
   switch (code) {
     case "SESION_PAUSADA":
       return isResumable(state) ? pause(state, clientNow, null) : null;
@@ -613,7 +626,7 @@ function onServerError(state: RunnerState, code: RuntimeErrorCode, clientNow: nu
     case "TOKEN_EXPIRADO":
       return blocked(state, "expirado");
     case "ASIGNACION_NO_OPERABLE":
-      return blocked(state, "asignacionNoOperable");
+      return blocked(state, delivered ? "evaluacionEntregada" : "asignacionNoOperable");
     default:
       return assertNever(code);
   }
@@ -772,7 +785,7 @@ function transition(state: RunnerState, event: RunnerEvent): RunnerState | null 
       return onSessionStatusChanged(state, event.status, event.clientNow);
 
     case "SERVER_ERROR":
-      return onServerError(state, event.code, event.clientNow);
+      return onServerError(state, event.code, event.clientNow, event.delivered === true);
 
     case "ACCESS_REVOKED":
       return blocked(state, "accesoRevocado");

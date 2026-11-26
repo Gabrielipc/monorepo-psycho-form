@@ -1139,6 +1139,22 @@ describe("SERVER_ERROR: todos los códigos", () => {
     expect([...covered].sort()).toEqual([...RUNTIME_ERROR_CODES].sort());
   });
 
+  it("ASIGNACION_NO_OPERABLE con delivered=true bloquea como evaluacionEntregada", () => {
+    const next = expectKind(
+      reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "ASIGNACION_NO_OPERABLE", clientNow: T0, delivered: true }),
+      "bloqueado",
+    );
+    expect(next.reason).toBe("evaluacionEntregada");
+  });
+
+  it("delivered=true no altera otros códigos de bloqueo", () => {
+    const next = expectKind(
+      reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "TOKEN_EXPIRADO", clientNow: T0, delivered: true }),
+      "bloqueado",
+    );
+    expect(next.reason).toBe("expirado");
+  });
+
   const blockingCodes: ReadonlyArray<[RuntimeErrorCode, BlockReason]> = [
     ["SESION_NO_ABIERTA", "sesionNoAbierta"],
     ["SESION_FINALIZADA", "sesionCerrada"],

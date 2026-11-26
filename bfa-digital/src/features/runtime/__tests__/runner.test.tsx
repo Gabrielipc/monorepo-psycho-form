@@ -968,6 +968,47 @@ describe("Runner del participante (R-04)", () => {
     failFinishAttempt = false;
     fireEvent.click(within(attDialog).getByRole("button", { name: "Confirmar entrega final" }));
     expect(await screen.findByText("Evaluación Finalizada")).toBeInTheDocument();
+    // El finalizar confirmado por el servidor deja el marcador de entrega de la asignación.
+    expect(sessionStorage.getItem("bfa-runtime-delivered:42")).toBe("1");
+  });
+
+  it("recarga tras entregar: 409 ASIGNACION_NO_OPERABLE con marcador muestra «Evaluación entregada» sin acciones de escritura", async () => {
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+    sessionStorage.setItem("bfa-runtime-delivered:42", "1");
+    server.use(
+      http.get(`${API}/evaluacion-participante/yo`, () => apiErr(409, "ASIGNACION_NO_OPERABLE", "No operable")),
+    );
+
+    await renderRunnerAt("/evaluacion/sesion");
+    expect(await screen.findByRole("heading", { name: "Evaluación entregada" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /no operable/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /finalizar|enviar|responder/i })).not.toBeInTheDocument();
+  });
+
+  it("409 ASIGNACION_NO_OPERABLE sin marcador (o de otra asignación) muestra el texto honesto de bloqueo", async () => {
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+    sessionStorage.setItem("bfa-runtime-delivered:99", "1");
+    server.use(
+      http.get(`${API}/evaluacion-participante/yo`, () => apiErr(409, "ASIGNACION_NO_OPERABLE", "No operable")),
+    );
+
+    await renderRunnerAt("/evaluacion/sesion");
+    expect(await screen.findByRole("heading", { name: /no operable/i })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Esta evaluación ya no admite respuestas. Si ya la entregaste, tus respuestas quedaron registradas. Consulta al aplicador si tienes dudas.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Evaluación entregada" })).not.toBeInTheDocument();
+  });
+
+  it("canjear un código de otra asignación limpia el marcador de entrega previo", () => {
+    useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+    sessionStorage.setItem("bfa-runtime-delivered:42", "1");
+    useParticipantAuth.getState().setSession({ token: "jwt-42b", assignmentId: 42 });
+    expect(sessionStorage.getItem("bfa-runtime-delivered:42")).toBe("1");
+    useParticipantAuth.getState().setSession({ token: "jwt-77", assignmentId: 77 });
+    expect(sessionStorage.getItem("bfa-runtime-delivered:42")).toBeNull();
   });
 
   it("polling que marca el subtest activo como ANULADO redirige de /items/$ordinal a /evaluacion/sesion", async () => {

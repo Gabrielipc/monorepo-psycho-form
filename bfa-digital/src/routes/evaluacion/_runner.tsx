@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { createFileRoute, Outlet, redirect, useNavigate } from "@tanstack/react-router";
-import { AlertCircle, AlertTriangle, Clock, Lock, PauseCircle, RefreshCw, ShieldAlert } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Lock, PauseCircle, RefreshCw, ShieldAlert } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "../../app/components/ui/alert";
 import { Brand } from "../../app/components/brand";
@@ -59,7 +59,13 @@ const BLOCK_MESSAGES: Record<BlockReason, { title: string; description: string }
   },
   asignacionNoOperable: {
     title: "Asignación no operable",
-    description: "Su asignación fue anulada o ya no se encuentra activa en esta sesión.",
+    description:
+      "Esta evaluación ya no admite respuestas. Si ya la entregaste, tus respuestas quedaron registradas. Consulta al aplicador si tienes dudas.",
+  },
+  evaluacionEntregada: {
+    title: "Evaluación entregada",
+    description:
+      "Ya entregaste esta evaluación y tus respuestas quedaron registradas. No es posible modificarlas. Puedes cerrar esta ventana.",
   },
 };
 
@@ -230,8 +236,16 @@ function RunnerShell() {
                 <Brand />
               </div>
 
-              <div className="mx-auto flex size-12 items-center justify-center rounded-full border border-status-danger-border bg-status-danger-bg text-status-danger-fg">
-                {state.reason === "accesoRevocado" ? (
+              <div
+                className={
+                  state.reason === "evaluacionEntregada"
+                    ? "mx-auto flex size-12 items-center justify-center rounded-full border border-status-success-border bg-status-success-bg text-status-success-fg"
+                    : "mx-auto flex size-12 items-center justify-center rounded-full border border-status-danger-border bg-status-danger-bg text-status-danger-fg"
+                }
+              >
+                {state.reason === "evaluacionEntregada" ? (
+                  <CheckCircle2 className="size-6" aria-hidden="true" />
+                ) : state.reason === "accesoRevocado" ? (
                   <ShieldAlert className="size-6" aria-hidden="true" />
                 ) : (
                   <Lock className="size-6" aria-hidden="true" />

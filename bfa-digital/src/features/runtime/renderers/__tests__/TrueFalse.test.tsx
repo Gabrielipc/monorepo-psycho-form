@@ -265,4 +265,69 @@ describe("TrueFalse", () => {
     fireEvent.keyDown(window, { key: "f" });
     expect(onChange).toHaveBeenCalledTimes(1);
   });
+
+  describe("atajos V/F según el contenido de las opciones", () => {
+    const renderWith = (options: RuntimeItem["options"]) => {
+      const onChange = vi.fn();
+      render(
+        <TrueFalse
+          item={makeTrueFalseItem(options)}
+          value={{ kind: "VERDADERO_FALSO", optionId: null }}
+          onChange={onChange}
+          hotkeysActive
+        />,
+      );
+      return onChange;
+    };
+    const badges = () => screen.getAllByRole("radio").map((r) => r.querySelector("[aria-hidden='true']")?.textContent);
+
+    it("orden Verdadero/Falso: V y F seleccionan según su texto y las insignias coinciden", () => {
+      const onChange = renderWith([
+        { id: 1, label: "A", text: "Verdadero", order: 1, images: [] },
+        { id: 2, label: "B", text: "Falso", order: 2, images: [] },
+      ]);
+      expect(badges()).toEqual(["V", "F"]);
+      fireEvent.keyDown(window, { key: "v" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 1 });
+      fireEvent.keyDown(window, { key: "F" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 2 });
+    });
+
+    it("orden Falso/Verdadero: V selecciona Verdadero (segunda opción) y la insignia V está en ese botón", () => {
+      const onChange = renderWith([
+        { id: 1, label: "A", text: "Falso", order: 1, images: [] },
+        { id: 2, label: "B", text: "Verdadero", order: 2, images: [] },
+      ]);
+      expect(badges()).toEqual(["F", "V"]);
+      fireEvent.keyDown(window, { key: "v" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 2 });
+      fireEvent.keyDown(window, { key: "f" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 1 });
+      // 1/2 siguen siendo posicionales
+      fireEvent.keyDown(window, { key: "1" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 1 });
+    });
+
+    it("detecta por acentos/mayúsculas y por el código cuando no hay texto", () => {
+      const onChange = renderWith([
+        { id: 1, label: "F", order: 1, images: [] },
+        { id: 2, label: "V", order: 2, images: [] },
+      ]);
+      fireEvent.keyDown(window, { key: "v" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 2 });
+    });
+
+    it("caso ambiguo: V/F desactivados, solo 1/2 posicionales y la insignia muestra 1/2", () => {
+      const onChange = renderWith([
+        { id: 1, label: "A", text: "Sí", order: 1, images: [] },
+        { id: 2, label: "B", text: "No", order: 2, images: [] },
+      ]);
+      expect(badges()).toEqual(["1", "2"]);
+      fireEvent.keyDown(window, { key: "v" });
+      fireEvent.keyDown(window, { key: "f" });
+      expect(onChange).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, { key: "2" });
+      expect(onChange).toHaveBeenLastCalledWith({ kind: "VERDADERO_FALSO", optionId: 2 });
+    });
+  });
 });

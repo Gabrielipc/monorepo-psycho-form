@@ -29,6 +29,7 @@ import type {
   SubtestAttempt,
 } from "../../api/schemas/runtime";
 import { RUNTIME_ERROR_CODES } from "../../api/schemas/runtime";
+import { isDelivered, markDelivered } from "../../store/deliveredMarker";
 import { useParticipantAuth } from "../../store/participantAuth";
 import { fromSavedAnswer, type AnswerValue } from "./answer-value";
 import { computeBackoffMs } from "./draft/backoff";
@@ -63,12 +64,19 @@ import {
   startSubtestOkEvent,
   timingRemainingMs,
   type FinishReason,
+  type RunnerEvent,
   type RunnerState,
 } from "./machine";
 import { ensureVisibilityListener, evaluationGuard, inheritEvaluationTicket, isTicketCurrent } from "./evaluation-guard";
 import { evaluationQueryOptions, runtimeKeys, subtestItemsQueryOptions } from "./queries";
 
 const DEFAULT_POLLING_INTERVAL_MS = 10_000;
+
+/** Evento SERVER_ERROR; con ASIGNACION_NO_OPERABLE añade si hay marcador de entrega de la asignación vigente. */
+function serverErrorEvent(code: RuntimeErrorCode): RunnerEvent {
+  const delivered = code === "ASIGNACION_NO_OPERABLE" && isDelivered(useParticipantAuth.getState().assignmentId);
+  return { type: "SERVER_ERROR", code, clientNow: monoNow(), ...(delivered ? { delivered: true } : {}) };
+}
 /** Retraso SOLO del envío por red del texto abierto; el draft local se actualiza en cada tecla. */
 const TEXT_SEND_DEBOUNCE_MS = 300;
 
@@ -640,7 +648,7 @@ export function RunnerProvider({
     if (isStaleParticipantError(err)) return;
     if (isRuntimeBlocked(err)) {
       if (err.code === "SESION_PAUSADA" && stateRef.current.kind === "pausada") return;
-      dispatch({ type: "SERVER_ERROR", code: err.code as RuntimeErrorCode, clientNow: monoNow() });
+      dispatch(serverErrorEvent(err.code as RuntimeErrorCode));
       return;
     }
     if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
@@ -663,7 +671,7 @@ export function RunnerProvider({
     if (RUNTIME_ERROR_SET.has(code)) {
       if (code === "SESION_PAUSADA" && stateRef.current.kind === "pausada") return;
       if (isResumable(stateRef.current) || code !== "SESION_PAUSADA") {
-        dispatch({ type: "SERVER_ERROR", code: code as RuntimeErrorCode, clientNow: monoNow() });
+        dispatch(serverErrorEvent(code as RuntimeErrorCode));
       }
     }
   }, [syncStatus.blockedCode]);
@@ -776,7 +784,7 @@ export function RunnerProvider({
       if (isStaleParticipantError(err)) return true;
       if (!isOwnerActive(capturedAssignmentId, capturedAttemptId)) return true;
       if (isRuntimeBlocked(err)) {
-        dispatch({ type: "SERVER_ERROR", code: err.code as RuntimeErrorCode, clientNow: monoNow() });
+        dispatch(serverErrorEvent(err.code as RuntimeErrorCode));
         return true;
       }
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
@@ -946,7 +954,7 @@ export function RunnerProvider({
     }
     if (RUNTIME_ERROR_SET.has(block.code)) {
       if (!(block.code === "SESION_PAUSADA" && stateRef.current.kind === "pausada")) {
-        dispatch({ type: "SERVER_ERROR", code: block.code as RuntimeErrorCode, clientNow: monoNow() });
+        dispatch(serverErrorEvent(block.code as RuntimeErrorCode));
       }
       return true;
     }
@@ -1351,6 +1359,7 @@ export function RunnerProvider({
         runtimeKeys.evaluation(capturedAssignmentId),
         (prev) => (prev ? inheritEvaluationTicket<Evaluation>(prev, { ...prev, attemptStatus: "COMPLETADO" }) : prev),
       );
+      markDelivered(capturedAssignmentId);
       clearRuntimeDraft();
       dispatch({ type: "FINISH_ATTEMPT_OK" });
       return true;

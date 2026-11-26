@@ -12,7 +12,6 @@ export interface TrueFalseProps extends AnswerRendererProps<"VERDADERO_FALSO"> {
   renderImage?: (image: RuntimeImage) => React.ReactNode;
 }
 
-const SEGMENT_HOTKEYS = ["V", "F"] as const;
 
 function getImageGridClass(optionCount: number): string {
   if (optionCount <= 2) return "grid grid-cols-1 sm:grid-cols-2 gap-3";
@@ -25,16 +24,49 @@ function resolveOptionLabel(option: RuntimeOption): string {
   return trimmedText && trimmedText.length > 0 ? option.text! : option.label;
 }
 
-function resolveHotkeyIndex(key: string): 0 | 1 | null {
+function normalizeToken(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .trim()
+    .toUpperCase();
+}
+
+const TRUE_WORDS = ["VERDADERO", "TRUE", "V"];
+const FALSE_WORDS = ["FALSO", "FALSE", "F"];
+
+function matchesWords(option: RuntimeOption, words: readonly string[]): boolean {
+  return [option.label, option.text].some((raw) => {
+    const norm = normalizeToken(raw);
+    if (norm.length === 0) return false;
+    return words.some((word) => (word.length === 1 ? norm === word : norm === word || norm.startsWith(`${word} `)));
+  });
+}
+
+/**
+ * Índices de las opciones a las que apuntan las teclas V y F. Solo hay atajo de letra si hay exactamente una
+ * opción «verdadero» y exactamente una «falso» distintas entre sí; si no, V/F quedan desactivados.
+ */
+function resolveLetterHotkeys(options: readonly RuntimeOption[]): { v: number; f: number } | null {
+  if (options.length !== 2) return null;
+  const trueIdx = options.flatMap((o, i) => (matchesWords(o, TRUE_WORDS) ? [i] : []));
+  const falseIdx = options.flatMap((o, i) => (matchesWords(o, FALSE_WORDS) ? [i] : []));
+  if (trueIdx.length !== 1 || falseIdx.length !== 1 || trueIdx[0] === falseIdx[0]) return null;
+  return { v: trueIdx[0]!, f: falseIdx[0]! };
+}
+
+function resolveHotkeyIndex(key: string, letters: { v: number; f: number } | null): number | null {
   switch (key) {
-    case "v":
-    case "V":
     case "1":
       return 0;
-    case "f":
-    case "F":
     case "2":
       return 1;
+    case "v":
+    case "V":
+      return letters ? letters.v : null;
+    case "f":
+    case "F":
+      return letters ? letters.f : null;
     default:
       return null;
   }
@@ -63,6 +95,9 @@ export function TrueFalse({
   const groupRef = React.useRef<HTMLDivElement>(null);
   const options = item.options;
   const isTwoOptions = options.length === 2;
+  const letterHotkeys = React.useMemo(() => resolveLetterHotkeys(options), [options]);
+  const hintFor = (index: number): string | null =>
+    letterHotkeys ? (index === letterHotkeys.v ? "V" : index === letterHotkeys.f ? "F" : null) : String(index + 1);
 
   React.useEffect(() => {
     if (import.meta.env.DEV && options.length !== 2) {
@@ -94,7 +129,7 @@ export function TrueFalse({
         return;
       }
 
-      const targetIndex = resolveHotkeyIndex(event.key);
+      const targetIndex = resolveHotkeyIndex(event.key, letterHotkeys);
       if (targetIndex === null) return;
 
       const targetOption = options[targetIndex];
@@ -108,12 +143,12 @@ export function TrueFalse({
     return () => {
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
-  }, [disabled, hotkeysActive, options, selectOption]);
+  }, [disabled, hotkeysActive, letterHotkeys, options, selectOption]);
 
   const handleGroupKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (disabled || event.ctrlKey || event.metaKey || event.altKey) return;
 
-    const targetIndex = resolveHotkeyIndex(event.key);
+    const targetIndex = resolveHotkeyIndex(event.key, letterHotkeys);
     if (targetIndex === null) return;
 
     const targetOption = options[targetIndex];
@@ -244,7 +279,7 @@ export function TrueFalse({
         {options.map((option, index) => {
           const isSelected = value.optionId === option.id;
           const visibleLabel = resolveOptionLabel(option);
-          const hotkeyHint = SEGMENT_HOTKEYS[index];
+          const hotkeyHint = hintFor(index);
           const hasOptionImages = Boolean(renderImage) && option.images.length > 0;
 
           return (
@@ -329,7 +364,7 @@ export function TrueFalse({
       {options.map((option, index) => {
         const isSelected = value.optionId === option.id;
         const visibleLabel = resolveOptionLabel(option);
-        const hotkeyHint = SEGMENT_HOTKEYS[index];
+        const hotkeyHint = hintFor(index);
 
         return (
           <button
