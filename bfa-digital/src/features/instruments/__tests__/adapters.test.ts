@@ -13,6 +13,7 @@ import {
   VersionConflictError,
 } from "../document/adapters";
 import { documentSignature, type VersionDocument } from "../document/types";
+import { resolveUncertainImageConflict } from "../document/reconcile";
 import { createDocumentReducer } from "../document/reducer";
 import { createCleanDocument, makeDeterministicDraftIdFactory } from "../document/__tests__/fixtures";
 
@@ -1807,7 +1808,7 @@ describe("saveVersionDocument", () => {
           resourceId: 905,
           order: 2,
           altText: "Segunda figura",
-          storagePath: "items/2.png",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-dos.png",
           role: "ENUNCIADO",
         };
         failReload = true;
@@ -2147,7 +2148,7 @@ describe("saveVersionDocument", () => {
     expect(writes).toBe(0);
   });
 
-  it("F3-FIX-6 (Hallazgo 2 - ALTO): imagen reemplazada tras 503 envía PUT by-order con el archivo nuevo y no adopta la obsoleta", async () => {
+  it("F3-FIX-6 / F3-FIX-7b (Hallazgo 2 - ALTO): imagen reemplazada tras 503 con nombre coincidente exige resolución manual (sin PUT automático) y envía PUT by-order al elegir «Aplicar mi cambio»", async () => {
     let postCalls = 0;
     let putItemCalls = 0;
     let putOptionCalls = 0;
@@ -2213,7 +2214,7 @@ describe("saveVersionDocument", () => {
           resourceId: 905,
           order: 2,
           altText: "Vieja ítem",
-          storagePath: "items/vieja.png",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-vieja-item.png",
           role: "ENUNCIADO",
         };
         failReload = true;
@@ -2226,7 +2227,7 @@ describe("saveVersionDocument", () => {
           resourceId: 906,
           order: 1,
           altText: "Vieja opción",
-          storagePath: "options/vieja.png",
+          storagePath: "test-config/options/40/550e8400-e29b-41d4-a716-446655440001-vieja-opt.png",
           role: null,
         };
         failReload = true;
@@ -2241,14 +2242,14 @@ describe("saveVersionDocument", () => {
           resourceId: 995,
           order: 2,
           altText: "Nueva ítem",
-          storagePath: "items/nueva.png",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440002-nueva-item.png",
           role: "ENUNCIADO",
         };
         return HttpResponse.json(
           ok({
             imageLinkId: 88,
             resourceId: 995,
-            storagePath: "items/nueva.png",
+            storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440002-nueva-item.png",
             filename: "nueva-item.png",
             mimeType: "image/png",
             sizeBytes: 14,
@@ -2268,14 +2269,14 @@ describe("saveVersionDocument", () => {
           resourceId: 996,
           order: 1,
           altText: "Nueva opción",
-          storagePath: "options/nueva.png",
+          storagePath: "test-config/options/40/550e8400-e29b-41d4-a716-446655440003-nueva-opt.png",
           role: null,
         };
         return HttpResponse.json(
           ok({
             imageLinkId: 89,
             resourceId: 996,
-            storagePath: "options/nueva.png",
+            storagePath: "test-config/options/40/550e8400-e29b-41d4-a716-446655440003-nueva-opt.png",
             filename: "nueva-opt.png",
             mimeType: "image/png",
             sizeBytes: 13,
@@ -2383,7 +2384,7 @@ describe("saveVersionDocument", () => {
       resourceId: 906,
       order: 1,
       altText: "Vieja opción",
-      storagePath: "options/vieja.png",
+      storagePath: "test-config/options/40/550e8400-e29b-41d4-a716-446655440001-vieja-opt.png",
       role: null,
     };
     const sentWithBoth = structuredClone(partial.sent);
@@ -2408,13 +2409,49 @@ describe("saveVersionDocument", () => {
       "f-opt-new": new File(["new-opt-bytes"], "nueva-opt.png", { type: "image/png", lastModified: 200 }),
     };
 
-    const retried = await saveVersionDocument({
+    const conflictErr = await saveVersionDocument({
       document: editedDoc,
       pendingFiles: files2,
       baselineDocument: partial.baselineDocument ?? undefined,
       baselineSignature: partial.baselineSignature,
       reconciliationPending: partial.reconciliationPending,
       sent: sentWithBoth,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e);
+
+    expect(conflictErr).toBeInstanceOf(VersionConflictError);
+    const vErr = conflictErr as VersionConflictError;
+    expect(vErr.conflicts).toHaveLength(2);
+    expect(vErr.conflicts.every((c) => c.kind === "UNCERTAIN_IMAGE_OPERATION")).toBe(true);
+    expect(putItemCalls).toBe(0);
+    expect(putOptionCalls).toBe(0);
+
+    // Resolver manualmente ambos conflictos eligiendo «Aplicar mi cambio»
+    let resolvedDoc = editedDoc;
+    let resolvedBaseline = partial.baselineDocument ?? null;
+    let resolvedSent = sentWithBoth;
+    for (const conflict of vErr.conflicts) {
+      const next = resolveUncertainImageConflict({
+        document: resolvedDoc,
+        baseline: resolvedBaseline,
+        sent: resolvedSent,
+        resolution: conflict.resolution!,
+        choice: "apply_mine",
+      });
+      resolvedDoc = next.document;
+      resolvedBaseline = next.baseline;
+      resolvedSent = next.sent;
+    }
+
+    const retried = await saveVersionDocument({
+      document: resolvedDoc,
+      pendingFiles: files2,
+      baselineDocument: resolvedBaseline ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: resolvedSent,
       completedSteps: partial.completedSteps,
       pendingSteps: partial.pendingSteps,
       permissions: fullPermissions,
@@ -2431,7 +2468,7 @@ describe("saveVersionDocument", () => {
     expect(retried.document.subtests[0]?.items[0]?.options[0]?.images[0]?.resourceId).toBe(996);
   });
 
-  it("F3-FIX-6 (Hallazgo 2 - ALTO, borrado): si mine borró la imagen incierta sin adjuntar reemplazo, elimina la obsoleta en el servidor", async () => {
+  it("F3-FIX-6 / F3-FIX-7b (Hallazgo 2 - ALTO, borrado): si mine quitó la imagen incierta con nombre coincidente, exige confirmación manual y elimina solo tras elegir «Aplicar mi cambio»", async () => {
     let deleteCalls = 0;
     let failReload = false;
     let itemExtraImage: {
@@ -2482,7 +2519,7 @@ describe("saveVersionDocument", () => {
           resourceId: 905,
           order: 2,
           altText: "Vieja ítem",
-          storagePath: "items/vieja.png",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-vieja-item.png",
           role: "ENUNCIADO",
         };
         failReload = true;
@@ -2533,7 +2570,7 @@ describe("saveVersionDocument", () => {
     });
 
     failReload = false;
-    const retried = await saveVersionDocument({
+    const conflictErr = await saveVersionDocument({
       document: deletedDoc,
       pendingFiles: {},
       baselineDocument: partial.baselineDocument ?? undefined,
@@ -2543,10 +2580,440 @@ describe("saveVersionDocument", () => {
       completedSteps: partial.completedSteps,
       pendingSteps: partial.pendingSteps,
       permissions: fullPermissions,
+    }).catch((e: unknown) => e);
+
+    expect(conflictErr).toBeInstanceOf(VersionConflictError);
+    const vErr = conflictErr as VersionConflictError;
+    expect(vErr.conflicts).toHaveLength(1);
+    expect(vErr.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(deleteCalls).toBe(0);
+
+    const resolved = resolveUncertainImageConflict({
+      document: deletedDoc,
+      baseline: partial.baselineDocument,
+      sent: partial.sent,
+      resolution: vErr.conflicts[0]!.resolution!,
+      choice: "apply_mine",
+    });
+
+    const retried = await saveVersionDocument({
+      document: resolved.document,
+      pendingFiles: {},
+      baselineDocument: resolved.baseline ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: resolved.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
     });
 
     expect(deleteCalls).toBe(1);
     expect(retried.document.subtests[0]?.items[0]?.images).toHaveLength(1);
+  });
+
+  it("F3-FIX-7b (ALTO variante 1 - quitar): POST incierto no aplicado + imagen ajena en mismo orden → 409 externo y nunca DELETE ajeno", async () => {
+    let deleteCalls = 0;
+    let failReload = false;
+    let ajenaImage: {
+      sourceImageId: number;
+      resourceId: number;
+      order: number;
+      altText: string;
+      storagePath: string;
+      role: string;
+    } | null = null;
+
+    server.use(
+      http.get(`${API}/tests`, () => HttpResponse.json(ok([makeTestWire(1)]))),
+      http.get(`${API}/tests/1/versions`, () => HttpResponse.json(ok([makeVersionWire(10, 1)]))),
+      http.get(`${API}/test-versions/10/subtests`, () => {
+        if (failReload) {
+          return HttpResponse.json({ success: false, message: "Recarga 503" }, { status: 503 });
+        }
+        return HttpResponse.json(ok([makeSubtestWire(20, 10, "MEM", "Memoria Visual", 1)]));
+      }),
+      http.get(`${API}/subtests/20/clone-template`, () => {
+        const tpl = makeTemplateWire(20, "MEM");
+        tpl.items[0]!.sourceItemId = 30;
+        tpl.items[0]!.images = [
+          {
+            sourceImageId: 55,
+            resourceId: 77,
+            order: 1,
+            altText: "Figura estímulo",
+            storagePath: "items/1.png",
+            role: "ENUNCIADO",
+          },
+          ...(ajenaImage ? [ajenaImage] : []),
+        ];
+        tpl.items[0]!.options[0]!.sourceOptionId = 40;
+        tpl.items[0]!.options[1]!.sourceOptionId = 41;
+        tpl.items[0]!.answerKey!.sourceAnswerKeyId = 50;
+        tpl.items[0]!.answerKey!.correctOptionSourceId = 40;
+        return HttpResponse.json(ok(tpl));
+      }),
+      http.get(`${API}/subtests/20/scoring-rules`, () =>
+        HttpResponse.json(ok([makeRuleWire(80, 20, true)])),
+      ),
+      http.get(`${API}/test-versions/10/baremos`, () => HttpResponse.json(ok([]))),
+      http.post(`${API}/items/30/images`, () => {
+        // POST NO se aplicó, pero otro editor subió ajena.png en el mismo orden
+        ajenaImage = {
+          sourceImageId: 99,
+          resourceId: 920,
+          order: 2,
+          altText: "Imagen ajena",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-ajena.png",
+          role: "ENUNCIADO",
+        };
+        failReload = true;
+        return HttpResponse.json({ success: false, message: "503 sin aplicar" }, { status: 503 });
+      }),
+      http.delete(`${API}/items/images/99`, () => {
+        deleteCalls += 1;
+        return HttpResponse.json(ok(null));
+      }),
+    );
+
+    const loaded = await loadVersionDocument(10, { testId: 1 });
+    const baseline = loaded.document;
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1440));
+    const doc = reducer(baseline, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-a",
+        pendingFileId: "f-a",
+        order: 2,
+        altText: "Mi imagen",
+        role: "ENUNCIADO",
+        fileName: "a.png",
+      },
+    });
+
+    const partial = (await saveVersionDocument({
+      document: doc,
+      pendingFiles: { "f-a": new File(["a"], "a.png", { type: "image/png" }) },
+      baselineDocument: baseline,
+      baselineSignature: documentSignature(baseline),
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e)) as PartialSaveError;
+
+    const removedDoc = reducer(partial.document, {
+      type: "DELETE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-a",
+    });
+
+    failReload = false;
+    const err = await saveVersionDocument({
+      document: removedDoc,
+      pendingFiles: {},
+      baselineDocument: partial.baselineDocument ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: partial.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(VersionConflictError);
+    const vErr = err as VersionConflictError;
+    expect(vErr.conflicts).toHaveLength(1);
+    expect(vErr.conflicts[0]?.kind).toBe("image");
+    expect(vErr.conflicts[0]?.reason).toBe("Otro usuario adjuntó una imagen en el servidor.");
+    expect(deleteCalls).toBe(0);
+  });
+
+  it("F3-FIX-7b (ALTO variante 2 - reemplazar): POST incierto no aplicado + imagen ajena en mismo orden → 409 externo y nunca PUT sobre recurso ajeno", async () => {
+    let putCalls = 0;
+    let failReload = false;
+    let ajenaImage: {
+      sourceImageId: number;
+      resourceId: number;
+      order: number;
+      altText: string;
+      storagePath: string;
+      role: string;
+    } | null = null;
+
+    server.use(
+      http.get(`${API}/tests`, () => HttpResponse.json(ok([makeTestWire(1)]))),
+      http.get(`${API}/tests/1/versions`, () => HttpResponse.json(ok([makeVersionWire(10, 1)]))),
+      http.get(`${API}/test-versions/10/subtests`, () => {
+        if (failReload) {
+          return HttpResponse.json({ success: false, message: "Recarga 503" }, { status: 503 });
+        }
+        return HttpResponse.json(ok([makeSubtestWire(20, 10, "MEM", "Memoria Visual", 1)]));
+      }),
+      http.get(`${API}/subtests/20/clone-template`, () => {
+        const tpl = makeTemplateWire(20, "MEM");
+        tpl.items[0]!.sourceItemId = 30;
+        tpl.items[0]!.images = [
+          {
+            sourceImageId: 55,
+            resourceId: 77,
+            order: 1,
+            altText: "Figura estímulo",
+            storagePath: "items/1.png",
+            role: "ENUNCIADO",
+          },
+          ...(ajenaImage ? [ajenaImage] : []),
+        ];
+        tpl.items[0]!.options[0]!.sourceOptionId = 40;
+        tpl.items[0]!.options[1]!.sourceOptionId = 41;
+        tpl.items[0]!.answerKey!.sourceAnswerKeyId = 50;
+        tpl.items[0]!.answerKey!.correctOptionSourceId = 40;
+        return HttpResponse.json(ok(tpl));
+      }),
+      http.get(`${API}/subtests/20/scoring-rules`, () =>
+        HttpResponse.json(ok([makeRuleWire(80, 20, true)])),
+      ),
+      http.get(`${API}/test-versions/10/baremos`, () => HttpResponse.json(ok([]))),
+      http.post(`${API}/items/30/images`, () => {
+        ajenaImage = {
+          sourceImageId: 99,
+          resourceId: 920,
+          order: 2,
+          altText: "Imagen ajena",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-ajena.png",
+          role: "ENUNCIADO",
+        };
+        failReload = true;
+        return HttpResponse.json({ success: false, message: "503 sin aplicar" }, { status: 503 });
+      }),
+      http.put(`${API}/items/30/images/by-order/2`, () => {
+        putCalls += 1;
+        return HttpResponse.json(ok({}));
+      }),
+    );
+
+    const loaded = await loadVersionDocument(10, { testId: 1 });
+    const baseline = loaded.document;
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1450));
+    const doc = reducer(baseline, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-a",
+        pendingFileId: "f-a",
+        order: 2,
+        altText: "Mi imagen A",
+        role: "ENUNCIADO",
+        fileName: "a.png",
+      },
+    });
+
+    const partial = (await saveVersionDocument({
+      document: doc,
+      pendingFiles: { "f-a": new File(["a"], "a.png", { type: "image/png" }) },
+      baselineDocument: baseline,
+      baselineSignature: documentSignature(baseline),
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e)) as PartialSaveError;
+
+    let replacedDoc = reducer(partial.document, {
+      type: "DELETE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-a",
+    });
+    replacedDoc = reducer(replacedDoc, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-b",
+        pendingFileId: "f-b",
+        order: 2,
+        altText: "Mi imagen B",
+        role: "ENUNCIADO",
+        fileName: "b.png",
+      },
+    });
+
+    failReload = false;
+    const err = await saveVersionDocument({
+      document: replacedDoc,
+      pendingFiles: { "f-b": new File(["b"], "b.png", { type: "image/png" }) },
+      baselineDocument: partial.baselineDocument ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: partial.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(VersionConflictError);
+    const vErr = err as VersionConflictError;
+    expect(vErr.conflicts).toHaveLength(1);
+    expect(vErr.conflicts[0]?.kind).toBe("image");
+    expect(vErr.conflicts[0]?.reason).toBe("Otra imagen distinta ocupa el mismo orden en el servidor.");
+    expect(putCalls).toBe(0);
+  });
+
+  it("F3-FIX-7b (MEDIO): PUT incierto aplicado + recarga 503 + borrado antes de reintentar → UNCERTAIN_IMAGE_OPERATION y permite borrar o conservar", async () => {
+    let deleteCalls = 0;
+    let failReload = false;
+    let serverImage: {
+      sourceImageId: number;
+      resourceId: number;
+      order: number;
+      altText: string;
+      storagePath: string;
+      role: string;
+    } | null = {
+      sourceImageId: 55,
+      resourceId: 77,
+      order: 1,
+      altText: "Figura estímulo",
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-estimulo.png",
+      role: "ENUNCIADO",
+    };
+
+    server.use(
+      http.get(`${API}/tests`, () => HttpResponse.json(ok([makeTestWire(1)]))),
+      http.get(`${API}/tests/1/versions`, () => HttpResponse.json(ok([makeVersionWire(10, 1)]))),
+      http.get(`${API}/test-versions/10/subtests`, () => {
+        if (failReload) {
+          return HttpResponse.json({ success: false, message: "Recarga 503" }, { status: 503 });
+        }
+        return HttpResponse.json(ok([makeSubtestWire(20, 10, "MEM", "Memoria Visual", 1)]));
+      }),
+      http.get(`${API}/subtests/20/clone-template`, () => {
+        const tpl = makeTemplateWire(20, "MEM");
+        tpl.items[0]!.sourceItemId = 30;
+        tpl.items[0]!.images = serverImage ? [serverImage] : [];
+        tpl.items[0]!.options[0]!.sourceOptionId = 40;
+        tpl.items[0]!.options[1]!.sourceOptionId = 41;
+        tpl.items[0]!.answerKey!.sourceAnswerKeyId = 50;
+        tpl.items[0]!.answerKey!.correctOptionSourceId = 40;
+        return HttpResponse.json(ok(tpl));
+      }),
+      http.get(`${API}/subtests/20/scoring-rules`, () =>
+        HttpResponse.json(ok([makeRuleWire(80, 20, true)])),
+      ),
+      http.get(`${API}/test-versions/10/baremos`, () => HttpResponse.json(ok([]))),
+      http.put(`${API}/items/30/images/by-order/1`, () => {
+        serverImage = {
+          sourceImageId: 55,
+          resourceId: 995,
+          order: 1,
+          altText: "Figura estímulo",
+          storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440001-nueva.png",
+          role: "ENUNCIADO",
+        };
+        failReload = true;
+        return HttpResponse.json({ success: false, message: "503 tras PUT" }, { status: 503 });
+      }),
+      http.delete(`${API}/items/images/55`, () => {
+        deleteCalls += 1;
+        serverImage = null;
+        return HttpResponse.json(ok(null));
+      }),
+    );
+
+    const loaded = await loadVersionDocument(10, { testId: 1 });
+    const baseline = loaded.document;
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1460));
+    const docWithReplace = reducer(baseline, {
+      type: "UPDATE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+      patch: {
+        resourceId: null,
+        pendingFileId: "f-new",
+        fileName: "nueva.png",
+      },
+    });
+
+    const partial = (await saveVersionDocument({
+      document: docWithReplace,
+      pendingFiles: { "f-new": new File(["new"], "nueva.png", { type: "image/png" }) },
+      baselineDocument: baseline,
+      baselineSignature: documentSignature(baseline),
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e)) as PartialSaveError;
+
+    expect(partial).toBeInstanceOf(PartialSaveError);
+
+    const deletedBeforeRetry = reducer(partial.document, {
+      type: "DELETE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+    });
+
+    failReload = false;
+    const err = await saveVersionDocument({
+      document: deletedBeforeRetry,
+      pendingFiles: {},
+      baselineDocument: partial.baselineDocument ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: partial.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(VersionConflictError);
+    const vErr = err as VersionConflictError;
+    expect(vErr.conflicts).toHaveLength(1);
+    expect(vErr.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(vErr.conflicts[0]?.reason).not.toMatch(/modificada externamente/i);
+    expect(deleteCalls).toBe(0);
+
+    // Opción 1: «Conservar la imagen del servidor» → guarda limpio sin DELETE
+    const kept = resolveUncertainImageConflict({
+      document: deletedBeforeRetry,
+      baseline: partial.baselineDocument,
+      sent: partial.sent,
+      resolution: vErr.conflicts[0]!.resolution!,
+      choice: "keep_server",
+    });
+    const savedKept = await saveVersionDocument({
+      document: kept.document,
+      pendingFiles: {},
+      baselineDocument: kept.baseline ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: kept.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    });
+    expect(deleteCalls).toBe(0);
+    expect(savedKept.document.subtests[0]?.items[0]?.images[0]?.resourceId).toBe(995);
+
+    // Opción 2: «Aplicar mi cambio» → ejecuta DELETE /items/images/55
+    const applied = resolveUncertainImageConflict({
+      document: deletedBeforeRetry,
+      baseline: partial.baselineDocument,
+      sent: partial.sent,
+      resolution: vErr.conflicts[0]!.resolution!,
+      choice: "apply_mine",
+    });
+    const savedDeleted = await saveVersionDocument({
+      document: applied.document,
+      pendingFiles: {},
+      baselineDocument: applied.baseline ?? undefined,
+      baselineSignature: partial.baselineSignature,
+      reconciliationPending: partial.reconciliationPending,
+      sent: applied.sent,
+      completedSteps: partial.completedSteps,
+      pendingSteps: partial.pendingSteps,
+      permissions: fullPermissions,
+    });
+    expect(deleteCalls).toBe(1);
+    expect(savedDeleted.document.subtests[0]?.items[0]?.images).toHaveLength(0);
   });
 
   it("F3-FIX-6 (Hallazgo 3 - MEDIO): cambiar BAR-TOT a bar-tot tras 503 adopta el id y envía PATCH con bar-tot sin 409", async () => {

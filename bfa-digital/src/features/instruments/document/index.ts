@@ -27,10 +27,16 @@ export {
   type OrderCollisionEntry,
 } from "./reducer";
 export {
+  extractSanitizedFilenameFromStoragePath,
   reconcileVersionDocumentThreeWay,
+  resolveUncertainImageConflict,
+  sanitizeImageFilename,
   type DocumentConflictKind,
   type DocumentConflictNode,
   type ThreeWayReconcileResult,
+  type UncertainImageIntention,
+  type UncertainImageResolutionChoice,
+  type UncertainImageResolutionContext,
 } from "./reconcile";
 export {
   baremoNaturalKey,

@@ -58,6 +58,7 @@ export interface DocumentImage {
   altText: string;
   role: string | null;
   fileName: string | null;
+  storagePath?: string | null;
 }
 
 export interface DocumentAnswerKey {

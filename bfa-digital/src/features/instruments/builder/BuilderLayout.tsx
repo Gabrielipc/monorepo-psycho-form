@@ -12,8 +12,10 @@ import {
   collectPendingImageUploads,
   detectOrderCollisions,
   isDocumentDirty,
+  resolveUncertainImageConflict,
   validateVersionDocument,
   type DocumentConflictNode,
+  type UncertainImageResolutionChoice,
 } from "../document";
 import {
   OrderCollisionError,
@@ -141,6 +143,39 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
     !readOnly &&
     (permissions.canEdit || permissions.canConfigureBaremos);
   const dispatch = store.dispatch;
+
+  function resolveUncertainImage(
+    conflictIndex: number,
+    choice: UncertainImageResolutionChoice,
+  ) {
+    const target = conflicts[conflictIndex];
+    if (!target || target.kind !== "UNCERTAIN_IMAGE_OPERATION" || !target.resolution || !doc) {
+      return;
+    }
+    const resolved = resolveUncertainImageConflict({
+      document: doc,
+      baseline: store.serverBaseline,
+      sent: store.sent,
+      resolution: target.resolution,
+      choice,
+    });
+    const remainingConflicts = conflicts.filter((_, idx) => idx !== conflictIndex);
+    const nextDirty = isDocumentDirty(resolved.document);
+    const shouldClearPartial =
+      remainingConflicts.length === 0 && !nextDirty && !store.reconciliationPending;
+
+    store.reconcilePartialSave(resolved.document, resolved.baseline, undefined, {
+      sent: resolved.sent,
+      ...(shouldClearPartial ? { partialSave: null } : {}),
+    });
+    setConflicts(remainingConflicts);
+    if (remainingConflicts.length === 0) {
+      setError(undefined);
+      if (choice === "keep_server" && !nextDirty && !store.reconciliationPending) {
+        setMessage("Se conservó la imagen del servidor.");
+      }
+    }
+  }
 
   async function save() {
     if (!doc || (!canSave && !canRetryReconciliation) || working.current) return;
@@ -394,6 +429,28 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
                     {conflict.label}
                   </button>
                   {`: ${conflict.reason}`}
+                  {conflict.kind === "UNCERTAIN_IMAGE_OPERATION" && conflict.resolution && (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={pending}
+                        onClick={() => resolveUncertainImage(index, "keep_server")}
+                      >
+                        Conservar la imagen del servidor
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={pending}
+                        onClick={() => resolveUncertainImage(index, "apply_mine")}
+                      >
+                        Aplicar mi cambio
+                      </Button>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

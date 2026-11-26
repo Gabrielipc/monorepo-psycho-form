@@ -187,3 +187,20 @@ Las restricciones `UNIQUE` de orden (subtests por versión, ítems por subtest, 
 - Una rotación de 3 elementos → 200.
 - Un duplicado en el estado final → 400.
 - Un fallo a mitad de la transacción → rollback completo, sin órdenes temporales persistidos.
+
+---
+
+## B20. Identidad verificable de imágenes subidas (ítems y opciones)
+
+### Problema
+Cuando el POST o PUT de una imagen falla sin respuesta clara (503, timeout o red), el builder recarga con `GET /subtests/{id}/clone-template`. Esa plantilla trae `resourceId`, `order`, `altText`, `storagePath` y `role`, pero ningún dato que pruebe que la imagen es la que envió esta pestaña: falta nombre original, tamaño, hash y autor. Si otro editor ocupó el mismo orden, el frontend no puede distinguir los dos casos y hoy abre un conflicto manual («no se pudo confirmar si la operación se aplicó»). Tampoco existe un listado con metadatos de las imágenes de opciones.
+
+### Cambios
+1. **Recomendada:** que el POST y el PUT de imágenes de ítem y de opción acepten un header `Idempotency-Key`, un UUID generado por el cliente. Guardarlo en el recurso (`clave_subida`) y exponerlo como `uploadKey` en `clone-template` (`SubtestCloneTemplateDTO.ImageTemplate`) y en `GET /items/{itemId}/images`. Repetir una petición con la misma clave debe devolver el recurso ya creado, sin duplicarlo.
+2. Exponer también `originalFileName`, `sizeBytes` y `sha256` del archivo en `ImageTemplate`, para ítems y opciones.
+3. Mantener la compatibilidad: los campos nuevos son opcionales en la respuesta.
+
+### Tests
+- POST con una `Idempotency-Key` repetida → el mismo `resourceId`, sin un segundo registro.
+- `clone-template` devuelve `uploadKey`, `originalFileName`, `sizeBytes` y `sha256` para imágenes de ítem y de opción.
+- PUT con clave → la clave nueva queda visible en `clone-template`.

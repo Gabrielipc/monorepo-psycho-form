@@ -334,6 +334,7 @@ function mapTemplateImage(
     altText: img.altText ?? "",
     role: img.role,
     fileName: null,
+    storagePath: img.storagePath,
   };
 }
 
@@ -1630,6 +1631,7 @@ export async function saveVersionDocument(
             altText: uploaded.altText ?? upload.altText,
             role: uploaded.role ?? upload.role,
             fileName: uploaded.fileName,
+            storagePath: uploaded.storagePath,
           };
           workingDoc = {
             ...workingDoc,
@@ -1721,6 +1723,7 @@ export async function saveVersionDocument(
             altText: uploaded.altText ?? upload.altText,
             role: uploaded.role ?? upload.role,
             fileName: uploaded.fileName,
+            storagePath: uploaded.storagePath,
           };
           workingDoc = {
             ...workingDoc,

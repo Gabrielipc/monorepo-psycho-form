@@ -671,6 +671,7 @@ function buildClonedSubtest(
           altText: tplImg.altText ?? "",
           role: tplImg.role,
           fileName: null,
+          storagePath: tplImg.storagePath,
         })),
       };
     });
@@ -687,6 +688,7 @@ function buildClonedSubtest(
       altText: tplImg.altText ?? "",
       role: tplImg.role,
       fileName: null,
+      storagePath: tplImg.storagePath,
     }));
 
     const tplKey = tplItem.answerKey;

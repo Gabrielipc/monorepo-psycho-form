@@ -989,4 +989,129 @@ describe("BuilderLayout — ALTO 1, MEDIO 3, MEDIO 5", () => {
     unmount();
     queryClient.clear();
   });
+
+  it("F3-FIX-7b (UI UNCERTAIN_IMAGE_OPERATION): muestra explicación en español y botones «Conservar la imagen del servidor» y «Aplicar mi cambio» con ambas resoluciones funcionales", async () => {
+    let failReload = false;
+    let deleteCalls = 0;
+    let serverImage: {
+      sourceImageId: number;
+      resourceId: number;
+      order: number;
+      altText: string;
+      storagePath: string;
+      role: string;
+    } | null = null;
+
+    server.use(
+      http.get(`${API}/scoring/strategies`, () => HttpResponse.json(ok([]))),
+      http.get(`${API}/tests`, () => HttpResponse.json(ok([makeTestWire(1)]))),
+      http.get(`${API}/tests/1/versions`, () =>
+        HttpResponse.json(ok([makeVersionWire(10, "Lea con atención")])),
+      ),
+      http.get(`${API}/test-versions/10/subtests`, () => {
+        if (failReload) {
+          return HttpResponse.json({ success: false, message: "Recarga 503" }, { status: 503 });
+        }
+        return HttpResponse.json(ok([makeSubtestWire(20, "MEM", "Memoria Visual", 1)]));
+      }),
+      http.get(`${API}/subtests/20/clone-template`, () => {
+        const tpl = makeTemplateWire(20, "MEM");
+        (tpl.items[0] as { images: unknown[] }).images = serverImage ? [serverImage] : [];
+        return HttpResponse.json(ok(tpl));
+      }),
+      http.get(`${API}/subtests/20/scoring-rules`, () =>
+        HttpResponse.json(ok([makeRuleWire(80, 20)])),
+      ),
+      http.get(`${API}/test-versions/10/baremos`, () => HttpResponse.json(ok([]))),
+      http.post(`${API}/items/201/images`, () => {
+        serverImage = {
+          sourceImageId: 88,
+          resourceId: 905,
+          order: 1,
+          altText: "",
+          storagePath: "test-config/items/201/550e8400-e29b-41d4-a716-446655440000-estimulo.png",
+          role: "ENUNCIADO",
+        };
+        failReload = true;
+        return HttpResponse.json({ success: false, message: "503 tras POST" }, { status: 503 });
+      }),
+      http.delete(`${API}/items/images/88`, () => {
+        deleteCalls += 1;
+        serverImage = null;
+        return HttpResponse.json(ok(null));
+      }),
+      http.get(`${API}/items/images/resources/905`, () =>
+        new HttpResponse(new Blob(["img"], { type: "image/png" }), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+      ),
+    );
+
+    const { unmount, queryClient } = renderBuilder();
+    await screen.findByRole("region", { name: "Editor de versión" });
+
+    fireEvent.click(screen.getByRole("button", { name: /IT-1/i }));
+    const itemImagesHeading = await screen.findByRole("heading", { name: "Imágenes de estímulo" });
+    const itemImagesSection = itemImagesHeading.closest("section")!;
+    const fileInput = within(itemImagesSection).getByLabelText("Seleccionar archivo de imagen");
+    const file = new File(["bytes"], "estimulo.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    expect(await screen.findByText(/Reconciliación pendiente:/i)).toBeVisible();
+
+    // Quitar la imagen localmente antes de reintentar
+    fireEvent.click(within(itemImagesSection).getByRole("button", { name: "Eliminar imagen" }));
+    failReload = false;
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar sincronización" }));
+
+    expect(
+      await screen.findByText(/No se pudo confirmar si la operación anterior sobre esta imagen se aplicó en el servidor/i),
+    ).toBeVisible();
+    const keepServerBtn = screen.getByRole("button", { name: "Conservar la imagen del servidor" });
+    const applyMineBtn = screen.getByRole("button", { name: "Aplicar mi cambio" });
+    expect(keepServerBtn).toBeVisible();
+    expect(applyMineBtn).toBeVisible();
+    expect(deleteCalls).toBe(0);
+
+    // Flujo 1: «Aplicar mi cambio» borra la imagen en el servidor al guardar
+    fireEvent.click(applyMineBtn);
+    expect(
+      screen.queryByRole("button", { name: "Aplicar mi cambio" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    expect(await screen.findByText("Versión guardada.")).toBeVisible();
+    expect(deleteCalls).toBe(1);
+
+    // Flujo 2: «Conservar la imagen del servidor» descarta la intención sin borrar
+    serverImage = null;
+    const itemImagesSection2 = (
+      await screen.findByRole("heading", { name: "Imágenes de estímulo" })
+    ).closest("section")!;
+    fireEvent.change(within(itemImagesSection2).getByLabelText("Seleccionar archivo de imagen"), {
+      target: { files: [new File(["bytes"], "estimulo.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar borrador" }));
+    expect(await screen.findByText(/Reconciliación pendiente:/i)).toBeVisible();
+
+    fireEvent.click(within(itemImagesSection2).getByRole("button", { name: "Eliminar imagen" }));
+    failReload = false;
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar sincronización" }));
+
+    const keepBtn2 = await screen.findByRole("button", { name: "Conservar la imagen del servidor" });
+    fireEvent.click(keepBtn2);
+    expect(
+      screen.queryByRole("button", { name: "Conservar la imagen del servidor" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar sincronización" }));
+    expect(await screen.findByText("Versión guardada.")).toBeVisible();
+    expect(deleteCalls).toBe(1);
+    expect(useBuilderStore.getState().document?.subtests[0]?.items[0]?.images).toHaveLength(1);
+
+    unmount();
+    queryClient.clear();
+  });
 });

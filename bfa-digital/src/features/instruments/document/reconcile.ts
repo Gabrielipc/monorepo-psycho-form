@@ -45,8 +45,25 @@ export type DocumentConflictKind =
   | "option"
   | "answerKey"
   | "image"
+  | "UNCERTAIN_IMAGE_OPERATION"
   | "baremo"
   | "baremoRange";
+
+export type UncertainImageIntention = "delete" | "replace" | "reupload";
+
+export type UncertainImageResolutionChoice = "keep_server" | "apply_mine";
+
+export interface UncertainImageResolutionContext {
+  ownerKind: "item" | "option";
+  subtestDraftId: string;
+  itemDraftId: string;
+  optionDraftId: string | null;
+  order: number;
+  uploadKey: string;
+  intention: UncertainImageIntention;
+  serverImage: DocumentImage;
+  localImageDraftId?: string;
+}
 
 export interface DocumentConflictNode {
   kind: DocumentConflictKind;
@@ -54,6 +71,7 @@ export interface DocumentConflictNode {
   nodeKey: string;
   label: string;
   reason: string;
+  resolution?: UncertainImageResolutionContext;
 }
 
 export interface ThreeWayReconcileResult {
@@ -502,6 +520,345 @@ function deletedByOtherReason(noun: string, localEdits: string[]): string {
 // Imágenes
 // ---------------------------------------------------------------------------
 
+const STORAGE_UUID_FILENAME_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(.+)$/i;
+
+function originalFilename(filename: string | null | undefined): string {
+  if (!filename || filename.trim() === "") {
+    return "image";
+  }
+  const normalized = filename.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(slash + 1) : normalized;
+}
+
+/**
+ * Replica exactamente el saneamiento de nombres de archivo del backend
+ * (`InstrumentImageService.java` ~346-361).
+ */
+export function sanitizeImageFilename(filename: string | null | undefined): string {
+  return originalFilename(filename).replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+/**
+ * Extrae el nombre saneado del segmento final `{uuid}-{sanitizedFilename}` de `storagePath`.
+ * Devuelve `null` si la ruta está vacía o no cumple el formato `{uuid}-...`.
+ */
+export function extractSanitizedFilenameFromStoragePath(
+  storagePath: string | null | undefined,
+): string | null {
+  if (!storagePath || storagePath.trim() === "") return null;
+  const normalized = storagePath.trim().replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  const lastSegment = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+  const match = STORAGE_UUID_FILENAME_PATTERN.exec(lastSegment);
+  return match ? match[1]! : null;
+}
+
+type UncertainUploadMatch = "mismatch" | "ambiguous";
+
+function classifyUncertainUpload(
+  theirs: DocumentImage,
+  sentUpload: SentUploadRecord,
+): UncertainUploadMatch {
+  const remoteSanitized = extractSanitizedFilenameFromStoragePath(theirs.storagePath);
+  if (remoteSanitized === null || sentUpload.fileName == null) {
+    return "ambiguous";
+  }
+  const sentSanitized = sanitizeImageFilename(sentUpload.fileName);
+  return remoteSanitized === sentSanitized ? "ambiguous" : "mismatch";
+}
+
+function uncertainImageReason(intention: UncertainImageIntention): string {
+  switch (intention) {
+    case "delete":
+      return "No se pudo confirmar si la operación anterior sobre esta imagen se aplicó en el servidor; hay una imagen en esta posición que podría ser tuya o de otro editor.";
+    case "replace":
+      return "No se pudo confirmar si la subida anterior se aplicó en el servidor antes de reemplazar la imagen; la imagen actual del servidor podría ser tuya o de otro editor.";
+    case "reupload":
+      return "No se pudo confirmar si la subida anterior de esta imagen se aplicó en el servidor.";
+  }
+}
+
+function pushUncertainImageConflict(params: {
+  ctx: ReconcileContext;
+  ownerKind: "item" | "option";
+  ownerLabel: string;
+  itemNode: DocumentNodeRef;
+  subtestDraftId: string;
+  itemDraftId: string;
+  optionDraftId: string | null;
+  uploadKey: string;
+  intention: UncertainImageIntention;
+  serverImage: DocumentImage;
+  localImageDraftId?: string;
+}): void {
+  const {
+    ctx,
+    ownerKind,
+    ownerLabel,
+    itemNode,
+    subtestDraftId,
+    itemDraftId,
+    optionDraftId,
+    uploadKey,
+    intention,
+    serverImage,
+    localImageDraftId,
+  } = params;
+  pushConflict(ctx, {
+    kind: "UNCERTAIN_IMAGE_OPERATION",
+    node: itemNode,
+    label: `Imagen #${serverImage.order} (${ownerLabel})`,
+    reason: uncertainImageReason(intention),
+    resolution: {
+      ownerKind,
+      subtestDraftId,
+      itemDraftId,
+      optionDraftId,
+      order: serverImage.order,
+      uploadKey,
+      intention,
+      serverImage: structuredClone(serverImage),
+      ...(localImageDraftId !== undefined ? { localImageDraftId } : {}),
+    },
+  });
+}
+
+function resolveImageListForChoice(
+  images: readonly DocumentImage[],
+  resolution: UncertainImageResolutionContext,
+  choice: UncertainImageResolutionChoice,
+): DocumentImage[] {
+  const { serverImage, localImageDraftId, intention } = resolution;
+
+  if (choice === "keep_server") {
+    const kept: DocumentImage = {
+      ...structuredClone(serverImage),
+      draftId: localImageDraftId ?? serverImage.draftId,
+      status: "EXISTING",
+    };
+    let inserted = false;
+    const next: DocumentImage[] = [];
+    for (const img of images) {
+      const matchesTarget =
+        (localImageDraftId !== undefined && img.draftId === localImageDraftId) ||
+        (serverImage.id !== null && img.id === serverImage.id) ||
+        (isActiveDraftNode(img) && img.order === serverImage.order);
+      if (matchesTarget) {
+        if (!inserted) {
+          next.push(kept);
+          inserted = true;
+        }
+        continue;
+      }
+      next.push(img);
+    }
+    if (!inserted) next.push(kept);
+    return next;
+  }
+
+  if (intention === "delete") {
+    const deleted: DocumentImage = {
+      ...structuredClone(serverImage),
+      draftId: localImageDraftId ?? serverImage.draftId,
+      status: "DELETED",
+    };
+    let inserted = false;
+    const next: DocumentImage[] = [];
+    for (const img of images) {
+      const matchesTarget =
+        (localImageDraftId !== undefined && img.draftId === localImageDraftId) ||
+        (serverImage.id !== null && img.id === serverImage.id);
+      if (matchesTarget) {
+        if (!inserted) {
+          next.push(deleted);
+          inserted = true;
+        }
+        continue;
+      }
+      next.push(img);
+    }
+    if (!inserted) next.push(deleted);
+    return next;
+  }
+
+  // intention === "replace" | "reupload": preparar PUT .../by-order/{order} sobre serverImage.id
+  let inserted = false;
+  const next: DocumentImage[] = [];
+  for (const img of images) {
+    if (localImageDraftId !== undefined && img.draftId === localImageDraftId) {
+      next.push({
+        ...structuredClone(img),
+        id: serverImage.id,
+        resourceId: null,
+        status: "UPDATED",
+      });
+      inserted = true;
+      continue;
+    }
+    if (serverImage.id !== null && img.id === serverImage.id) {
+      continue;
+    }
+    next.push(img);
+  }
+  if (!inserted) {
+    next.push({
+      ...structuredClone(serverImage),
+      status: "UPDATED",
+    });
+  }
+  return next;
+}
+
+function upsertBaselineImageList(
+  images: readonly DocumentImage[],
+  serverImage: DocumentImage,
+): DocumentImage[] {
+  const baselineEntry: DocumentImage = {
+    ...structuredClone(serverImage),
+    status: "EXISTING",
+  };
+  let inserted = false;
+  const next: DocumentImage[] = [];
+  for (const img of images) {
+    const matches =
+      (serverImage.id !== null && img.id === serverImage.id) ||
+      (isActiveDraftNode(img) && img.order === serverImage.order);
+    if (matches) {
+      if (!inserted) {
+        next.push(baselineEntry);
+        inserted = true;
+      }
+      continue;
+    }
+    next.push(img);
+  }
+  if (!inserted) next.push(baselineEntry);
+  return next;
+}
+
+/**
+ * Resuelve manualmente un conflicto `UNCERTAIN_IMAGE_OPERATION` aplicando la elección del usuario
+ * sobre el documento local, su línea base y el snapshot `sent`.
+ */
+export function resolveUncertainImageConflict(params: {
+  document: VersionDocument;
+  baseline: VersionDocument | null;
+  sent: SentSnapshot;
+  resolution: UncertainImageResolutionContext;
+  choice: UncertainImageResolutionChoice;
+}): {
+  document: VersionDocument;
+  baseline: VersionDocument | null;
+  sent: SentSnapshot;
+} {
+  const { document, baseline, sent, resolution, choice } = params;
+  const { ownerKind, subtestDraftId, itemDraftId, optionDraftId, uploadKey, localImageDraftId, serverImage } =
+    resolution;
+
+  const docSub = document.subtests.find((s) => s.draftId === subtestDraftId);
+  const docItem = docSub?.items.find((i) => i.draftId === itemDraftId);
+  const docOpt =
+    ownerKind === "option" && optionDraftId !== null
+      ? docItem?.options.find((o) => o.draftId === optionDraftId)
+      : undefined;
+
+  const nextSubtests = document.subtests.map((sub) => {
+    if (sub.draftId !== subtestDraftId) return sub;
+    return {
+      ...sub,
+      items: sub.items.map((item) => {
+        if (item.draftId !== itemDraftId) return item;
+        if (ownerKind === "item") {
+          return {
+            ...item,
+            images: resolveImageListForChoice(item.images, resolution, choice),
+          };
+        }
+        return {
+          ...item,
+          options: item.options.map((opt) =>
+            opt.draftId !== optionDraftId
+              ? opt
+              : {
+                  ...opt,
+                  images: resolveImageListForChoice(opt.images, resolution, choice),
+                },
+          ),
+        };
+      }),
+    };
+  });
+
+  const nextDocBase: VersionDocument = {
+    ...document,
+    subtests: nextSubtests,
+  };
+  const nextDocument: VersionDocument = {
+    ...nextDocBase,
+    dirtyNodeIds: getDirtyNodeIds(nextDocBase),
+  };
+
+  let nextBaseline: VersionDocument | null = baseline ? structuredClone(baseline) : null;
+  if (nextBaseline) {
+    nextBaseline = {
+      ...nextBaseline,
+      subtests: nextBaseline.subtests.map((sub) => {
+        const subMatch =
+          sub.draftId === subtestDraftId ||
+          (docSub?.id != null && sub.id === docSub.id) ||
+          (docSub !== undefined && codeKey(sub.code) === codeKey(docSub.code));
+        if (!subMatch) return sub;
+        return {
+          ...sub,
+          items: sub.items.map((item) => {
+            const itemMatch =
+              item.draftId === itemDraftId ||
+              (docItem?.id != null && item.id === docItem.id) ||
+              (docItem !== undefined && codeKey(item.code) === codeKey(docItem.code));
+            if (!itemMatch) return item;
+            if (ownerKind === "item") {
+              return {
+                ...item,
+                images: upsertBaselineImageList(item.images, serverImage),
+              };
+            }
+            return {
+              ...item,
+              options: item.options.map((opt) => {
+                const optMatch =
+                  opt.draftId === optionDraftId ||
+                  (docOpt?.id != null && opt.id === docOpt.id) ||
+                  (docOpt !== undefined && codeKey(opt.code) === codeKey(docOpt.code));
+                return optMatch
+                  ? { ...opt, images: upsertBaselineImageList(opt.images, serverImage) }
+                  : opt;
+              }),
+            };
+          }),
+        };
+      }),
+    };
+  }
+
+  const nextSent = cloneSentSnapshot(sent);
+  delete nextSent.uploads[uploadKey];
+  if (localImageDraftId !== undefined) {
+    const key =
+      ownerKind === "item"
+        ? sentKey.itemImage(subtestDraftId, itemDraftId, localImageDraftId)
+        : sentKey.optionImage(subtestDraftId, itemDraftId, optionDraftId ?? "", localImageDraftId);
+    delete nextSent.nodes[key];
+  }
+
+  return {
+    document: nextDocument,
+    baseline: nextBaseline,
+    sent: nextSent,
+  };
+}
+
 function isSameUploadedFile(
   mine: DocumentImage,
   sentUpload: SentUploadRecord,
@@ -592,14 +949,32 @@ function reconcileImages(params: {
           optionDraftId,
           order: theirs.order,
         });
-        if (ctx.sent.uploads[uploadKey] !== undefined) {
-          // Imagen propia subida con resultado incierto y luego eliminada localmente: marcar DELETED.
-          ctx.adopted += 1;
-          delete ctx.remainingSent.uploads[uploadKey];
-          reconciled.push({
-            ...structuredClone(theirs),
-            status: "DELETED",
-          });
+        const sentUpload = ctx.sent.uploads[uploadKey];
+        if (sentUpload !== undefined) {
+          if (classifyUncertainUpload(theirs, sentUpload) === "mismatch") {
+            // Regla 1: el nombre saneado difiere → el recurso remoto es ajeno, el POST no se aplicó.
+            delete ctx.remainingSent.uploads[uploadKey];
+            pushConflict(ctx, {
+              kind: "image",
+              node: itemNode,
+              label: `Imagen #${theirs.order} (${ownerLabel})`,
+              reason: "Otro usuario adjuntó una imagen en el servidor.",
+            });
+          } else {
+            // Regla 2 y 3: coincidencia de nombre o storagePath no parseable → conflicto manual, nunca DELETE automático.
+            pushUncertainImageConflict({
+              ctx,
+              ownerKind,
+              ownerLabel,
+              itemNode,
+              subtestDraftId,
+              itemDraftId,
+              optionDraftId,
+              uploadKey,
+              intention: "delete",
+              serverImage: theirs,
+            });
+          }
         } else {
           pushConflict(ctx, {
             kind: "image",
@@ -631,13 +1006,63 @@ function reconcileImages(params: {
     }
 
     if (mine.status === "DELETED") {
+      const primaryUploadKey = uploadSlotKey({
+        subtestDraftId,
+        itemDraftId,
+        optionDraftId,
+        order: theirs?.order ?? mine.order,
+      });
+      const fallbackUploadKey = uploadSlotKey({
+        subtestDraftId,
+        itemDraftId,
+        optionDraftId,
+        order: mine.order,
+      });
+      const matchedUploadKey =
+        ctx.sent.uploads[primaryUploadKey] !== undefined
+          ? primaryUploadKey
+          : ctx.sent.uploads[fallbackUploadKey] !== undefined
+            ? fallbackUploadKey
+            : null;
+      const sentUpload = matchedUploadKey ? ctx.sent.uploads[matchedUploadKey] : undefined;
+
       if (!theirs) {
         ctx.adopted += 1;
         consumeSent(ctx, sentImageKey(mine));
+        if (matchedUploadKey) delete ctx.remainingSent.uploads[matchedUploadKey];
         continue;
       }
       if (base && canonicalImage(theirs, ownerKind) === canonicalImage(base, ownerKind)) {
+        if (matchedUploadKey) delete ctx.remainingSent.uploads[matchedUploadKey];
         reconciled.push(structuredClone(mine));
+      } else if (sentUpload !== undefined && matchedUploadKey !== null) {
+        if (classifyUncertainUpload(theirs, sentUpload) === "mismatch") {
+          // Regla 1: el nombre saneado difiere → el PUT incierto no aplicó, es una edición externa real.
+          delete ctx.remainingSent.uploads[matchedUploadKey];
+          pushConflict(ctx, {
+            kind: "image",
+            node: itemNode,
+            label: `Imagen #${mine.order} (${ownerLabel})`,
+            reason: "La imagen fue modificada externamente antes de eliminarse.",
+          });
+          reconciled.push(structuredClone(mine));
+        } else {
+          // Regla 2 y 3 (Finding MEDIO): PUT incierto + borrado local → conflicto manual, nunca falso «edición externa».
+          pushUncertainImageConflict({
+            ctx,
+            ownerKind,
+            ownerLabel,
+            itemNode,
+            subtestDraftId,
+            itemDraftId,
+            optionDraftId,
+            uploadKey: matchedUploadKey,
+            intention: "delete",
+            serverImage: theirs,
+            localImageDraftId: mine.draftId,
+          });
+          reconciled.push(structuredClone(mine));
+        }
       } else {
         pushConflict(ctx, {
           kind: "image",
@@ -690,44 +1115,70 @@ function reconcileImages(params: {
           status: "UPDATED",
         });
       } else if ((!base || theirs.resourceId !== base.resourceId) && sentUpload !== undefined) {
-        delete ctx.remainingSent.uploads[uploadKey];
-        if (isSameUploadedFile(mine, sentUpload, ctx.pendingFiles)) {
-          // La subida terminó con resultado incierto y el archivo actual es el mismo: se adopta.
-          ctx.adopted += 1;
-          const expectedRole =
-            ownerKind === "item" ? (sentUpload.role ?? "ENUNCIADO") : sentUpload.role;
-          const mineRole = ownerKind === "item" ? (mine.role ?? "ENUNCIADO") : mine.role;
-          const metadataEditedAfterError =
-            sentUpload.altText !== undefined &&
-            (mine.altText.trim() !== sentUpload.altText.trim() || mineRole !== expectedRole);
-
-          if (metadataEditedAfterError) {
-            reconciled.push({
-              ...structuredClone(mine),
-              id: theirs.id,
-              resourceId: theirs.resourceId,
-              pendingFileId: null,
-              previewUrl: theirs.previewUrl,
-              fileName: theirs.fileName,
-              status: "UPDATED",
-            });
-          } else {
-            reconciled.push({
-              ...structuredClone(theirs),
-              draftId: mine.draftId,
-              status: "EXISTING",
-            });
-          }
-        } else {
-          // El usuario reemplazó el archivo pendiente por otro distinto: la imagen en theirs es
-          // nuestra pero obsoleta, así que se reemplazará por orden con PUT .../by-order/{order}.
-          reconciled.push({
-            ...structuredClone(mine),
-            id: theirs.id,
-            status: "UPDATED",
+        if (classifyUncertainUpload(theirs, sentUpload) === "mismatch") {
+          // Regla 1: el nombre saneado difiere → el recurso remoto es ajeno, mi subida sigue pendiente y choca por orden.
+          delete ctx.remainingSent.uploads[uploadKey];
+          pushConflict(ctx, {
+            kind: "image",
+            node: itemNode,
+            label: `Imagen #${mine.order} (${ownerLabel})`,
+            reason: "Otra imagen distinta ocupa el mismo orden en el servidor.",
           });
+          reconciled.push(structuredClone(mine));
+          continue;
+        }
+
+        const sameFile = isSameUploadedFile(mine, sentUpload, ctx.pendingFiles);
+        const expectedRole =
+          ownerKind === "item" ? (sentUpload.role ?? "ENUNCIADO") : sentUpload.role;
+        const mineRole = ownerKind === "item" ? (mine.role ?? "ENUNCIADO") : mine.role;
+        const metadataEditedAfterError =
+          sentUpload.altText !== undefined &&
+          (mine.altText.trim() !== sentUpload.altText.trim() || mineRole !== expectedRole);
+        const theirsRole = ownerKind === "item" ? (theirs.role ?? "ENUNCIADO") : theirs.role;
+        const theirsMatchesSentMetadata =
+          (sentUpload.altText === undefined ||
+            theirs.altText.trim() === sentUpload.altText.trim()) &&
+          (sentUpload.role === undefined || theirsRole === expectedRole);
+        const hasParseableMatchingFilename =
+          extractSanitizedFilenameFromStoragePath(theirs.storagePath) !== null &&
+          sentUpload.fileName != null;
+
+        if (
+          hasParseableMatchingFilename &&
+          sameFile &&
+          !metadataEditedAfterError &&
+          theirsMatchesSentMetadata
+        ) {
+          // Regla 4: el usuario no tocó la imagen y no implica escribir sobre el recurso → confirmar EXISTING.
+          delete ctx.remainingSent.uploads[uploadKey];
+          ctx.adopted += 1;
+          reconciled.push({
+            ...structuredClone(theirs),
+            draftId: mine.draftId,
+            status: "EXISTING",
+          });
+        } else {
+          // Reglas 2, 3 y 4: coincidencia insuficiente o intención posterior → conflicto manual, nunca PUT automático.
+          pushUncertainImageConflict({
+            ctx,
+            ownerKind,
+            ownerLabel,
+            itemNode,
+            subtestDraftId,
+            itemDraftId,
+            optionDraftId,
+            uploadKey,
+            intention: sameFile ? "reupload" : "replace",
+            serverImage: theirs,
+            localImageDraftId: mine.draftId,
+          });
+          reconciled.push(structuredClone(mine));
         }
       } else {
+        if (sentUpload !== undefined && base && theirs.resourceId === base.resourceId) {
+          delete ctx.remainingSent.uploads[uploadKey];
+        }
         pushConflict(ctx, {
           kind: "image",
           node: itemNode,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createDocumentReducer } from "../reducer";
-import { reconcileVersionDocumentThreeWay } from "../reconcile";
+import {
+  extractSanitizedFilenameFromStoragePath,
+  reconcileVersionDocumentThreeWay,
+  resolveUncertainImageConflict,
+  sanitizeImageFilename,
+} from "../reconcile";
 import {
   baremoNaturalKey,
   canonicalBaremo,
@@ -95,6 +100,7 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-5)", () => {
       altText: "Estímulo 2",
       role: "ENUNCIADO",
       fileName: "dos.png",
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-dos.png",
     };
     theirs.subtests[0]!.items[0]!.images.push(persistedImg);
 
@@ -110,6 +116,7 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-5)", () => {
       itemDraftId: "item-30",
       optionDraftId: null,
       order: 2,
+      fileName: "dos.png",
       altText: "Estímulo 2",
       role: "ENUNCIADO",
     };
@@ -419,7 +426,7 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
     );
   });
 
-  it("Hallazgo 2 (ALTO): imagen reemplazada tras 503 NO adopta el recurso obsoleto y conserva el archivo nuevo para PUT by-order", () => {
+  it("Hallazgo 2 (ALTO, F3-FIX-7b): imagen reemplazada tras 503 con nombre coincidente genera UNCERTAIN_IMAGE_OPERATION y solo prepara PUT tras elegir «Aplicar mi cambio»", () => {
     const base = createCleanDocument({ baremos: [] });
     const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1210));
 
@@ -478,7 +485,7 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
       },
     });
 
-    // El servidor sí guardó la primera imagen (resourceId=901, id=777)
+    // El servidor tiene una imagen con el mismo nombre saneado (ambigua)
     const theirs = structuredClone(base);
     theirs.subtests[0]!.items[0]!.images.push({
       id: 777,
@@ -491,7 +498,8 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
       order: 2,
       altText: "Estímulo viejo",
       role: "ENUNCIADO",
-      fileName: "vieja.png",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-vieja.png",
     });
 
     const pendingFiles = {
@@ -505,21 +513,51 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
       sent,
       pendingFiles,
     });
-    expect(result.conflicts).toEqual([]);
-    const reconciledImg = result.document.subtests[0]!.items[0]!.images.find(
-      (img) => img.order === 2,
-    );
-    expect(reconciledImg).toMatchObject({
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.resolution?.intention).toBe("replace");
+    // Nunca prepara PUT automático: la imagen en mine sigue sin id remoto
+    const pendingImg = result.document.subtests[0]!.items[0]!.images.find((img) => img.order === 2);
+    expect(pendingImg?.id).toBeNull();
+    expect(result.sent.uploads[slotKey]).toBeDefined();
+
+    // Resolver aplicando el cambio local prepara PUT by-order sobre id=777
+    const applied = resolveUncertainImageConflict({
+      document: mine,
+      baseline: base,
+      sent,
+      resolution: result.conflicts[0]!.resolution!,
+      choice: "apply_mine",
+    });
+    const appliedImg = applied.document.subtests[0]!.items[0]!.images.find((img) => img.order === 2);
+    expect(appliedImg).toMatchObject({
       id: 777,
       resourceId: null,
       pendingFileId: "file-new",
       status: "UPDATED",
       fileName: "nueva.png",
     });
-    expect(result.sent.uploads[slotKey]).toBeUndefined();
+    expect(applied.sent.uploads[slotKey]).toBeUndefined();
+
+    // Resolver conservando el servidor descarta la intención local
+    const kept = resolveUncertainImageConflict({
+      document: mine,
+      baseline: base,
+      sent,
+      resolution: result.conflicts[0]!.resolution!,
+      choice: "keep_server",
+    });
+    const keptImg = kept.document.subtests[0]!.items[0]!.images.find((img) => img.order === 2);
+    expect(keptImg).toMatchObject({
+      id: 777,
+      resourceId: 901,
+      pendingFileId: null,
+      status: "EXISTING",
+    });
+    expect(kept.sent.uploads[slotKey]).toBeUndefined();
   });
 
-  it("Hallazgo 2 (ALTO): si mine borró la imagen incierta sin adjuntar otra, marca la obsoleta como DELETED", () => {
+  it("Hallazgo 2 (ALTO, F3-FIX-7b): si mine quitó la imagen incierta con nombre coincidente, genera UNCERTAIN_IMAGE_OPERATION y nunca marca DELETED automático", () => {
     const base = createCleanDocument({ baremos: [] });
     const sent = createEmptySentSnapshot();
     const slotKey = uploadSlotKey({
@@ -549,19 +587,29 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
       order: 2,
       altText: "Estímulo viejo",
       role: "ENUNCIADO",
-      fileName: "vieja.png",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-vieja.png",
     });
 
     const result = reconcileVersionDocumentThreeWay({ base, mine: base, theirs, sent });
-    expect(result.conflicts).toEqual([]);
-    const deletedImg = result.document.subtests[0]!.items[0]!.images.find(
-      (img) => img.id === 777,
-    );
-    expect(deletedImg).toMatchObject({
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.resolution?.intention).toBe("delete");
+    expect(result.document.subtests[0]!.items[0]!.images.find((img) => img.id === 777)).toBeUndefined();
+    expect(result.sent.uploads[slotKey]).toBeDefined();
+
+    const applied = resolveUncertainImageConflict({
+      document: base,
+      baseline: base,
+      sent,
+      resolution: result.conflicts[0]!.resolution!,
+      choice: "apply_mine",
+    });
+    expect(applied.document.subtests[0]!.items[0]!.images.find((img) => img.id === 777)).toMatchObject({
       id: 777,
       status: "DELETED",
     });
-    expect(result.sent.uploads[slotKey]).toBeUndefined();
+    expect(applied.sent.uploads[slotKey]).toBeUndefined();
   });
 
   it("Hallazgo 3 (MEDIO): código cambiado después del envío empareja por clave natural de sent en baremos, subtests, ítems y opciones", () => {
@@ -687,5 +735,417 @@ describe("reconcileVersionDocumentThreeWay (F3-FIX-6)", () => {
       code: "opt-a",
       status: "UPDATED",
     });
+  });
+});
+
+describe("sanitizeImageFilename y extractSanitizedFilenameFromStoragePath (F3-FIX-7b)", () => {
+  it("replica exactamente el saneamiento de InstrumentImageService.java (~346-361)", () => {
+    expect(sanitizeImageFilename(null)).toBe("image");
+    expect(sanitizeImageFilename(undefined)).toBe("image");
+    expect(sanitizeImageFilename("")).toBe("image");
+    expect(sanitizeImageFilename("   \t\n ")).toBe("image");
+    expect(sanitizeImageFilename("foto_1-test.webp")).toBe("foto_1-test.webp");
+    expect(sanitizeImageFilename("C:\\Users\\Ana\\mi foto (1)@2x.png")).toBe(
+      "mi_foto__1__2x.png",
+    );
+    expect(sanitizeImageFilename("carpeta/sub/árbol-ñ#.jpg")).toBe("_rbol-__.jpg");
+  });
+
+  it("extrae el nombre saneado tras {uuid}- y devuelve null cuando storagePath no es parseable", () => {
+    expect(
+      extractSanitizedFilenameFromStoragePath(
+        "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-mi_foto__1_.png",
+      ),
+    ).toBe("mi_foto__1_.png");
+    expect(
+      extractSanitizedFilenameFromStoragePath(
+        "test-config/options/40/550E8400-E29B-41D4-A716-446655440000-opt-a.webp",
+      ),
+    ).toBe("opt-a.webp");
+    expect(extractSanitizedFilenameFromStoragePath("items/1.png")).toBeNull();
+    expect(extractSanitizedFilenameFromStoragePath("test-config/items/30/no-uuid-a.png")).toBeNull();
+    expect(
+      extractSanitizedFilenameFromStoragePath(
+        "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-",
+      ),
+    ).toBeNull();
+    expect(extractSanitizedFilenameFromStoragePath("")).toBeNull();
+    expect(extractSanitizedFilenameFromStoragePath(null)).toBeNull();
+  });
+});
+
+describe("reconcileVersionDocumentThreeWay (F3-FIX-7b)", () => {
+  it("ALTO variante 1 (quitar): POST incierto no aplicado + imagen ajena distinta en mismo orden → descarte negativo (Regla 1), nunca marca DELETED", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: "f-a",
+      fileName: "a.png",
+      altText: "Propia",
+      role: "ENUNCIADO",
+    };
+
+    // Otro editor subió ajena.png en el orden 2
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images.push({
+      id: 888,
+      draftId: "img-888",
+      sourceId: null,
+      resourceId: 910,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/910",
+      status: "EXISTING",
+      order: 2,
+      altText: "Ajena",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-ajena.png",
+    });
+
+    const result = reconcileVersionDocumentThreeWay({ base, mine: base, theirs, sent });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("image");
+    expect(result.conflicts[0]?.reason).toBe("Otro usuario adjuntó una imagen en el servidor.");
+    expect(
+      result.document.subtests[0]!.items[0]!.images.some((img) => img.status === "DELETED"),
+    ).toBe(false);
+    expect(result.sent.uploads[slotKey]).toBeUndefined();
+  });
+
+  it("ALTO variante 2 (reemplazar): POST incierto no aplicado + imagen ajena distinta en mismo orden → descarte negativo (Regla 1), nunca prepara PUT sobre recurso ajeno", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1400));
+
+    const mine = reducer(base, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-b",
+        pendingFileId: "f-b",
+        order: 2,
+        altText: "Reemplazo B",
+        role: "ENUNCIADO",
+        fileName: "b.png",
+      },
+    });
+
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: "f-a",
+      fileName: "a.png",
+      altText: "Propia",
+      role: "ENUNCIADO",
+    };
+
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images.push({
+      id: 888,
+      draftId: "img-888",
+      sourceId: null,
+      resourceId: 910,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/910",
+      status: "EXISTING",
+      order: 2,
+      altText: "Ajena",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-ajena.png",
+    });
+
+    const result = reconcileVersionDocumentThreeWay({
+      base,
+      mine,
+      theirs,
+      sent,
+      pendingFiles: {
+        "f-b": new File(["b"], "b.png", { type: "image/png" }),
+      },
+    });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("image");
+    expect(result.conflicts[0]?.reason).toBe("Otra imagen distinta ocupa el mismo orden en el servidor.");
+    const pendingImg = result.document.subtests[0]!.items[0]!.images.find((img) => img.order === 2);
+    expect(pendingImg).toMatchObject({
+      id: null,
+      resourceId: null,
+      pendingFileId: "f-b",
+      status: "CREATED",
+    });
+    expect(result.sent.uploads[slotKey]).toBeUndefined();
+  });
+
+  it("MEDIO: PUT incierto aplicado + recarga fallida + imagen borrada antes de reintentar → UNCERTAIN_IMAGE_OPERATION (no falso «edición externa»)", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1410));
+
+    // Imagen existente id=55 en order=1 se reemplaza por nueva.png, falla con 503 y luego se borra
+    let mine = reducer(base, {
+      type: "UPDATE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+      patch: {
+        resourceId: null,
+        pendingFileId: "f-new",
+        fileName: "nueva.png",
+      },
+    });
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 1,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 1,
+      pendingFileId: "f-new",
+      fileName: "nueva.png",
+      altText: "Figura estímulo",
+      role: "ENUNCIADO",
+    };
+
+    mine = reducer(mine, {
+      type: "DELETE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-55",
+    });
+
+    // El PUT sí aplicó en el servidor (resourceId 77 -> 995, storagePath con nueva.png)
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images[0] = {
+      ...theirs.subtests[0]!.items[0]!.images[0]!,
+      resourceId: 995,
+      previewUrl: "/items/images/resources/995",
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-nueva.png",
+    };
+
+    const result = reconcileVersionDocumentThreeWay({ base, mine, theirs, sent });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(result.conflicts[0]?.reason).not.toMatch(/modificada externamente/i);
+    expect(result.conflicts[0]?.resolution?.intention).toBe("delete");
+
+    // Aplicar mi cambio -> deja DELETED contra el nuevo baseline
+    const applied = resolveUncertainImageConflict({
+      document: mine,
+      baseline: base,
+      sent,
+      resolution: result.conflicts[0]!.resolution!,
+      choice: "apply_mine",
+    });
+    expect(applied.document.subtests[0]!.items[0]!.images[0]).toMatchObject({
+      id: 55,
+      resourceId: 995,
+      status: "DELETED",
+    });
+    expect(applied.baseline?.subtests[0]!.items[0]!.images[0]).toMatchObject({
+      id: 55,
+      resourceId: 995,
+      status: "EXISTING",
+    });
+
+    // Conservar imagen del servidor -> descarta el borrado y adopta 995 como EXISTING
+    const kept = resolveUncertainImageConflict({
+      document: mine,
+      baseline: base,
+      sent,
+      resolution: result.conflicts[0]!.resolution!,
+      choice: "keep_server",
+    });
+    expect(kept.document.subtests[0]!.items[0]!.images[0]).toMatchObject({
+      id: 55,
+      resourceId: 995,
+      status: "EXISTING",
+    });
+  });
+
+  it("Regla 1: sin intención posterior y nombre distinto en servidor → recurso ajeno sin UNCERTAIN_IMAGE_OPERATION", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1420));
+
+    const mine = reducer(base, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-a",
+        pendingFileId: "f-a",
+        order: 2,
+        altText: "Propia",
+        role: "ENUNCIADO",
+        fileName: "a.png",
+      },
+    });
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: "f-a",
+      fileName: "a.png",
+      altText: "Propia",
+      role: "ENUNCIADO",
+    };
+
+    const theirs = structuredClone(base);
+    theirs.subtests[0]!.items[0]!.images.push({
+      id: 888,
+      draftId: "img-888",
+      sourceId: null,
+      resourceId: 910,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/910",
+      status: "EXISTING",
+      order: 2,
+      altText: "Propia",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-ajena.png",
+    });
+
+    const result = reconcileVersionDocumentThreeWay({
+      base,
+      mine,
+      theirs,
+      sent,
+      pendingFiles: { "f-a": new File(["a"], "a.png", { type: "image/png" }) },
+    });
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.conflicts[0]?.kind).toBe("image");
+    expect(result.conflicts[0]?.reason).toBe("Otra imagen distinta ocupa el mismo orden en el servidor.");
+    expect(result.sent.uploads[slotKey]).toBeUndefined();
+  });
+
+  it("Reglas 2 y 4: storagePath no parseable o metadatos editados tras 503 → conflicto manual UNCERTAIN_IMAGE_OPERATION sin escritura automática", () => {
+    const base = createCleanDocument({ baremos: [] });
+    const reducer = createDocumentReducer(makeDeterministicDraftIdFactory(1430));
+
+    const mineUntouched = reducer(base, {
+      type: "ATTACH_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      image: {
+        draftId: "img-a",
+        pendingFileId: "f-a",
+        order: 2,
+        altText: "Propia",
+        role: "ENUNCIADO",
+        fileName: "a.png",
+      },
+    });
+    const sent = createEmptySentSnapshot();
+    const slotKey = uploadSlotKey({
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+    });
+    sent.uploads[slotKey] = {
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      optionDraftId: null,
+      order: 2,
+      pendingFileId: "f-a",
+      fileName: "a.png",
+      altText: "Propia",
+      role: "ENUNCIADO",
+    };
+
+    // 1. storagePath sin formato {uuid}-...
+    const theirsUnparseable = structuredClone(base);
+    theirsUnparseable.subtests[0]!.items[0]!.images.push({
+      id: 888,
+      draftId: "img-888",
+      sourceId: null,
+      resourceId: 910,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/910",
+      status: "EXISTING",
+      order: 2,
+      altText: "Propia",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "items/a.png",
+    });
+
+    const unparseableRes = reconcileVersionDocumentThreeWay({
+      base,
+      mine: mineUntouched,
+      theirs: theirsUnparseable,
+      sent,
+      pendingFiles: { "f-a": new File(["a"], "a.png", { type: "image/png" }) },
+    });
+    expect(unparseableRes.conflicts).toHaveLength(1);
+    expect(unparseableRes.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(unparseableRes.conflicts[0]?.resolution?.intention).toBe("reupload");
+
+    // 2. storagePath válido pero altText editado después del error (requeriría escribir sobre el recurso)
+    const mineEditedMeta = reducer(mineUntouched, {
+      type: "UPDATE_ITEM_IMAGE",
+      subtestDraftId: "sub-20",
+      itemDraftId: "item-30",
+      imageDraftId: "img-a",
+      patch: { altText: "Alt editado tras 503" },
+    });
+    const theirsValid = structuredClone(base);
+    theirsValid.subtests[0]!.items[0]!.images.push({
+      id: 888,
+      draftId: "img-888",
+      sourceId: null,
+      resourceId: 910,
+      pendingFileId: null,
+      previewUrl: "/items/images/resources/910",
+      status: "EXISTING",
+      order: 2,
+      altText: "Propia",
+      role: "ENUNCIADO",
+      fileName: null,
+      storagePath: "test-config/items/30/550e8400-e29b-41d4-a716-446655440000-a.png",
+    });
+
+    const editedMetaRes = reconcileVersionDocumentThreeWay({
+      base,
+      mine: mineEditedMeta,
+      theirs: theirsValid,
+      sent,
+      pendingFiles: { "f-a": new File(["a"], "a.png", { type: "image/png" }) },
+    });
+    expect(editedMetaRes.conflicts).toHaveLength(1);
+    expect(editedMetaRes.conflicts[0]?.kind).toBe("UNCERTAIN_IMAGE_OPERATION");
+    expect(editedMetaRes.conflicts[0]?.resolution?.intention).toBe("reupload");
   });
 });
