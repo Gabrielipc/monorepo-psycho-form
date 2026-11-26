@@ -424,6 +424,28 @@ describe("validateVersionDocument", () => {
       expect(validateVersionDocument(doc).canPublish).toBe(false);
     });
 
+    it("bloquea única con A correcta que pasa a múltiple con códigos 'A,B' (correctOption heredado)", () => {
+      const doc = withKey("OPCION_MULTIPLE", { correctOptionDraftId: "opt-40", expectedText: "A,B" });
+      const report = validateVersionDocument(doc);
+      expect(report.errors.map((e) => e.code)).toContain("UNSUPPORTED_SCORING_KEY");
+      expect(report.canSave).toBe(true);
+      expect(report.canApprove).toBe(false);
+      doc.version.status = "APROBADO";
+      expect(validateVersionDocument(doc).canPublish).toBe(false);
+    });
+
+    it("bloquea NUMERICA/TEXTO_ABIERTO con valor o texto esperado aunque haya correctOption heredado", () => {
+      const num = validateVersionDocument(
+        withKey("NUMERICA", { correctOptionDraftId: "opt-40", expectedNumber: 42 }),
+      );
+      expect(num.errors.map((e) => e.code)).toContain("UNSUPPORTED_SCORING_KEY");
+      const txt = validateVersionDocument(
+        withKey("TEXTO_ABIERTO", { correctOptionDraftId: "opt-40", expectedText: "hola" }),
+      );
+      expect(txt.errors.map((e) => e.code)).toContain("UNSUPPORTED_SCORING_KEY");
+      expect(txt.canSave).toBe(true);
+    });
+
     it("bloquea NUMERICA con valor esperado 42", () => {
       const report = validateVersionDocument(withKey("NUMERICA", { expectedNumber: 42 }));
       expect(report.errors.map((e) => e.code)).toContain("UNSUPPORTED_SCORING_KEY");

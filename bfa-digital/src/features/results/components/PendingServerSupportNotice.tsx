@@ -7,9 +7,8 @@ import { InlineNotice } from "./InlineNotice";
 export function PendingServerSupportNotice({ className }: { className?: string }) {
   return (
     <InlineNotice tone="info" title="Soporte pendiente en el servidor" className={className}>
-      Las revisiones manuales generadas automáticamente al calificar y la aplicación del puntaje resuelto al resultado
-      oficial dependen de soporte pendiente en el servidor. Por ahora esta pantalla puede no reflejar esas revisiones ni
-      su efecto en el puntaje.
+      El servidor todavía no genera las revisiones al calificar ni incorpora el puntaje manual al resultado oficial, así
+      que los ítems marcados «Requiere revisión» no aparecen en la bandeja de revisión manual por ahora.
     </InlineNotice>
   );
 }

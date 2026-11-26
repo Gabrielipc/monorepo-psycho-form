@@ -219,6 +219,11 @@ export function AttemptDetailPage({ attemptId: rawId }: { attemptId: string }) {
             <Link to="/app/revision-manual">Ir a revisión manual</Link>
           </Button>
         )}
+        {detail.requiresManualReview && canOpenReview && (
+          <span className="text-xs text-muted-foreground">
+            Por ahora la bandeja no recibe estas revisiones automáticamente.
+          </span>
+        )}
       </div>
 
       {graded && detail.requiresManualReview && <PendingServerSupportNotice />}

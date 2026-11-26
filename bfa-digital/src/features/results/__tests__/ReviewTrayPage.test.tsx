@@ -54,8 +54,8 @@ describe("ReviewTrayPage — estados", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/fallo de la bandeja/i);
     broken = false;
     fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
-    expect(await screen.findByText("Sin revisiones pendientes")).toBeInTheDocument();
-    expect(screen.getByText(/dependen de soporte pendiente en el servidor/i)).toBeInTheDocument();
+    expect(await screen.findByText("No hay revisiones disponibles en la bandeja")).toBeInTheDocument();
+    expect(screen.getByText(/servidor todavía no genera las revisiones al calificar/i)).toBeInTheDocument();
   });
 
   it("con revisiones en la lista no muestra el aviso de soporte pendiente", async () => {
@@ -91,7 +91,7 @@ describe("ReviewTrayPage — resolver", () => {
 
     expect(await screen.findByText("Revisión aprobada.")).toBeInTheDocument();
     expect(body).toEqual({ approved: true, score: 1.5, comment: "Respuesta adecuada" });
-    expect(await screen.findByText("Sin revisiones pendientes")).toBeInTheDocument();
+    expect(await screen.findByText("No hay revisiones disponibles en la bandeja")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 

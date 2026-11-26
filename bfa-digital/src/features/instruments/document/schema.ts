@@ -447,8 +447,12 @@ export function validateVersionDocument(
       if (
         activeKey !== null &&
         !activeKey.requiresManualReview &&
-        !hasValidCorrectOption &&
-        !SINGLE_KEY_OPTION_RESPONSE_TYPES.has(item.responseType)
+        !SINGLE_KEY_OPTION_RESPONSE_TYPES.has(item.responseType) &&
+        (!hasValidCorrectOption ||
+          // Un correctOption heredado no hace calificable la clave: el backend ignora
+          // el texto/valor esperado y daría puntaje completo a una respuesta parcial.
+          (item.responseType === "OPCION_MULTIPLE" && hasExpectedText) ||
+          (item.responseType !== "OPCION_MULTIPLE" && (hasExpectedText || hasExpectedNumber)))
       ) {
         pushProblem(problems, {
           severity: "error",

@@ -113,7 +113,10 @@ export function ReviewTrayPage() {
           onRetry={() => void query.refetch()}
           emptyState={
             <div className="space-y-4">
-              <EmptyState title="Sin revisiones pendientes" description="No hay respuestas esperando revisión manual." />
+              <EmptyState
+                title="No hay revisiones disponibles en la bandeja"
+                description="Los ítems marcados «Requiere revisión» no aparecen aquí por ahora."
+              />
               <PendingServerSupportNotice />
             </div>
           }

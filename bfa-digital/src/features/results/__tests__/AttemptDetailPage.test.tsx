@@ -64,7 +64,7 @@ describe("AttemptDetailPage", () => {
     );
     const view = await renderWithProviders(<AttemptDetailPage attemptId="42" />);
     expect(await screen.findByText("Soporte pendiente en el servidor")).toBeInTheDocument();
-    expect(screen.getByText(/dependen de soporte pendiente en el servidor/i)).toBeInTheDocument();
+    expect(screen.getByText(/servidor todavía no genera las revisiones al calificar/i)).toBeInTheDocument();
     view.unmount();
 
     server.use(http.get(`${API}/attempts/42/detailed-result`, () => ok({ ...detailedFixture, requiresManualReview: false })));
