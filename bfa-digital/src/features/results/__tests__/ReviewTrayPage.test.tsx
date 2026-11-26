@@ -43,7 +43,7 @@ describe("ReviewTrayPage — estados", () => {
     expect(await screen.findByText("María López")).toBeInTheDocument();
     expect(screen.getByText("Me siento tranquilo en general.")).toBeInTheDocument();
     expect(screen.getByText("IT-02")).toBeInTheDocument();
-    expect(screen.getByText("1 pendiente")).toBeInTheDocument();
+    expect(screen.getByText("1 revisión en la bandeja")).toBeInTheDocument();
   });
 
   it("bandeja vacía y error con Reintentar", async () => {

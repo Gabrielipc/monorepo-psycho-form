@@ -122,7 +122,7 @@ export function ReviewTrayPage() {
           }
           toolbar={
             <p className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
-              {query.isSuccess ? `${rows.length} ${rows.length === 1 ? "pendiente" : "pendientes"}` : ""}
+              {query.isSuccess ? `${rows.length} ${rows.length === 1 ? "revisión en la bandeja" : "revisiones en la bandeja"}` : ""}
             </p>
           }
         />

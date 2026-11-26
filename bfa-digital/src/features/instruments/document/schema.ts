@@ -14,7 +14,7 @@ import {
 
 export const UNSUPPORTED_SCORING_KEY_CODE = "UNSUPPORTED_SCORING_KEY";
 export const UNSUPPORTED_SCORING_KEY_MESSAGE =
-  "La calificación automática todavía no admite este tipo de clave; este ítem puntuaría cero. Usa una sola opción correcta o márcalo para revisión manual.";
+  "La calificación automática todavía no admite este tipo de clave: ignora los códigos o valores esperados, así que el ítem se calificaría mal (con cero o con puntaje completo por una selección parcial). Usa una sola opción correcta o márcalo para revisión manual.";
 
 export interface ValidateDocumentOptions {
   hasUnsavedChanges?: boolean;
