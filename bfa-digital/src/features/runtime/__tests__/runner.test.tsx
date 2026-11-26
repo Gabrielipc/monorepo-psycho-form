@@ -2876,4 +2876,82 @@ describe("Runner del participante (R-04)", () => {
       expect(await screen.findByText("Pregunta 2 del subtest 10")).toBeInTheDocument();
     });
   });
+
+  // ---------------------------------------------------------------------------------------------
+  // F2-FIX-8 · una copia derivada de un /yo invalidado no lo rehabilita
+  // ---------------------------------------------------------------------------------------------
+  describe("F2-FIX-8", () => {
+    const fakeClock = () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(FAKE_T0);
+    };
+    const advanceInSteps = async (totalMs: number, stepMs = 500) => {
+      for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(stepMs);
+        });
+      }
+    };
+    const newQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 5 * 60_000 } } });
+    const inProgressWithoutItems = () =>
+      makeEvaluationWire({
+        subtests: [
+          makeSubtestWire(10, 1, "EN_PROGRESO", {
+            timeLimitSeconds: 600,
+            startedAt: "2026-11-25T11:55:00.000Z",
+            ...liveTiming(500),
+            paused: false,
+            items: [],
+          }),
+        ],
+      });
+
+    it("MEDIO 2 · ensureItemsRoute con el /yo fuente invalidado mientras esperaba los ítems NO publica la copia ni navega a items/2; con el /yo vigente sí normaliza el ordinal", async () => {
+      fakeClock();
+      useParticipantAuth.getState().setSession({ token: "jwt-42", assignmentId: 42 });
+      let itemsRequested = false;
+      let releaseItems: () => void = () => undefined;
+      const itemsGate = new Promise<void>((resolve) => {
+        releaseItems = resolve;
+      });
+      server.use(
+        http.get(`${API}/evaluacion-participante/yo`, () => ok(inProgressWithoutItems())),
+        http.get(`${API}/intentos/101/subtests/10/items`, async () => {
+          itemsRequested = true;
+          await itemsGate;
+          return ok(makeSubtestWire(10, 1, "EN_PROGRESO"));
+        }),
+      );
+      const visibility = vi.spyOn(document, "visibilityState", "get");
+      const { router } = await renderRunnerAt("/evaluacion/sesion", newQueryClient());
+      await advanceInSteps(1_000);
+      expect(await screen.findByText("Subtest 10")).toBeInTheDocument();
+
+      // /yo vigente aplicado (sin ítems). Se navega al ordinal 100: el loader espera los ítems.
+      void router.navigate({
+        to: "/evaluacion/subtests/$subtestId/items/$ordinal",
+        params: { subtestId: 10, ordinal: 100 },
+      });
+      await waitFor(() => expect(itemsRequested).toBe(true));
+
+      // Se oculta la pestaña mientras se esperan los ítems: el /yo fuente queda invalidado y el loader deja pasar el 100.
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await act(async () => {
+        releaseItems();
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      await advanceInSteps(2_000);
+
+      // Con la pestaña aún oculta, la ruta montada NO rehabilita el /yo obsoleto ni cambia la URL.
+      expect(router.state.location.pathname).toBe("/evaluacion/subtests/10/items/100");
+
+      // Vuelve la pestaña: con el /yo vigente el ordinal se normaliza.
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await advanceInSteps(15_000);
+      expect(router.state.location.pathname).toBe("/evaluacion/subtests/10/items/2");
+      expect(await screen.findByText("Pregunta 2 del subtest 10")).toBeInTheDocument();
+    });
+  });
 });

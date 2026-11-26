@@ -65,7 +65,7 @@ import {
   type FinishReason,
   type RunnerState,
 } from "./machine";
-import { ensureVisibilityListener, evaluationGuard } from "./evaluation-guard";
+import { ensureVisibilityListener, evaluationGuard, inheritEvaluationTicket, isTicketCurrent } from "./evaluation-guard";
 import { evaluationQueryOptions, runtimeKeys, subtestItemsQueryOptions } from "./queries";
 
 const DEFAULT_POLLING_INTERVAL_MS = 10_000;
@@ -170,10 +170,11 @@ function withUpdatedSubtest(
   subtestId: number,
   updater: (subtest: RuntimeSubtest) => RuntimeSubtest,
 ): Evaluation {
-  return {
+  // F2-FIX-8: la copia hereda el MISMO ticket de la fuente; sin él, una fuente invalidada se «rehabilitaría».
+  return inheritEvaluationTicket(evaluation, {
     ...evaluation,
     subtests: evaluation.subtests.map((s) => (s.id === subtestId ? updater(s) : s)),
-  };
+  });
 }
 
 function mergeTimingFromAttempt(
@@ -807,11 +808,11 @@ export function RunnerProvider({
         runtimeKeys.evaluation(capturedAssignmentId),
         (prev) =>
           prev
-            ? {
+            ? inheritEvaluationTicket(prev, {
                 ...prev,
                 attemptId: attempt.id,
                 attemptStatus: attempt.status,
-              }
+              })
             : prev,
       );
       bindDraftOwner({ assignmentId: capturedAssignmentId, attemptId: attempt.id });
@@ -1348,7 +1349,7 @@ export function RunnerProvider({
 
       queryClient.setQueryData<Evaluation>(
         runtimeKeys.evaluation(capturedAssignmentId),
-        (prev) => (prev ? { ...prev, attemptStatus: "COMPLETADO" } : prev),
+        (prev) => (prev ? inheritEvaluationTicket<Evaluation>(prev, { ...prev, attemptStatus: "COMPLETADO" }) : prev),
       );
       clearRuntimeDraft();
       dispatch({ type: "FINISH_ATTEMPT_OK" });
@@ -1419,6 +1420,9 @@ export function RunnerProvider({
           );
           if (signal?.aborted || !isOwnerActive(capturedAssignmentId, capturedAttemptId)) return;
           if (isPausedOrTerminal()) return;
+          // F2-FIX-8: el await pudo durar lo bastante para que el /yo fuente quedara invalidado (pestaña oculta,
+          // cambio de dueño): no se publica ni se navega con él; al llegar el /yo vigente el efecto de la ruta repite.
+          if (!isTicketCurrent(ev)) return;
 
           items = loaded.items;
           if (items.length === 0) return;
@@ -1429,11 +1433,16 @@ export function RunnerProvider({
             runtimeKeys.evaluation(capturedAssignmentId),
             (prev) => {
               if (!prev) return prev;
-              if (!isEvaluationSubtestOperable(prev, capturedAttemptId, subtestId, RESUMABLE_ITEM_STATUSES)) {
+              // La fuente de la copia es la caché: si su ticket ya no es vigente, no se publica (F2-FIX-8).
+              if (
+                !isTicketCurrent(prev) ||
+                !isEvaluationSubtestOperable(prev, capturedAttemptId, subtestId, RESUMABLE_ITEM_STATUSES)
+              ) {
                 operableAfterFetch = false;
                 return prev;
               }
               operableAfterFetch = true;
+              // `withUpdatedSubtest` conserva el ticket de `prev`.
               mergedEvaluation = withUpdatedSubtest(prev, subtestId, (sub) => ({
                 ...sub,
                 items,

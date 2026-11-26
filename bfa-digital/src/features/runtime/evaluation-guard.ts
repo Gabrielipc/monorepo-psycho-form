@@ -32,6 +32,8 @@ export interface EvaluationGuard {
   /** Asocia el resultado (o el error) de una solicitud con su ticket. */
   register(result: object, ticket: EvaluationRequestTicket): void;
   ticketOf(result: unknown): EvaluationRequestTicket | undefined;
+  /** Copia derivada: conserva el MISMO ticket de la fuente (no uno nuevo ni ninguno). Fuente sin ticket → no-op. */
+  inherit(source: unknown, derived: object): void;
   /** Invalida todas las solicitudes iniciadas hasta ahora (ocultación de la pestaña). */
   invalidateForVisibility(): void;
   /** ¿Se puede adoptar el resultado de esta solicitud? Sin ticket → sí. */
@@ -56,6 +58,10 @@ export function createEvaluationGuard(getOwner: () => string): EvaluationGuard {
     },
     ticketOf(result) {
       return typeof result === "object" && result !== null ? tickets.get(result) : undefined;
+    },
+    inherit(source, derived) {
+      const ticket = typeof source === "object" && source !== null ? tickets.get(source) : undefined;
+      if (ticket !== undefined) tickets.set(derived, ticket);
     },
     invalidateForVisibility() {
       visibilityEpoch += 1;
@@ -101,6 +107,17 @@ export function ensureVisibilityListener(): void {
  */
 export function isTicketCurrent(data: unknown): boolean {
   return evaluationGuard.isCurrent(evaluationGuard.ticketOf(data));
+}
+
+/**
+ * Copia/derivación local de un /yo (F2-FIX-8): una evaluación construida a partir de otra (spread, `setQueryData` con
+ * un objeto nuevo) hereda EL MISMO ticket de su fuente. Si la fuente quedó invalidada (pestaña oculta, cambio de
+ * dueño), la copia no puede «rehabilitarla» pasando por un dato sin ticket (que se considera vigente).
+ * Devuelve `derived` para usarlo en línea.
+ */
+export function inheritEvaluationTicket<T extends object>(source: unknown, derived: T): T {
+  evaluationGuard.inherit(source, derived);
+  return derived;
 }
 
 /**

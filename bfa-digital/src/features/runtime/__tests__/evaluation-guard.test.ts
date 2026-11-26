@@ -8,6 +8,7 @@ import {
   createEvaluationGuard,
   evaluationGuard,
   fetchEvaluationWithTicket,
+  inheritEvaluationTicket,
   isTicketCurrent,
 } from "../evaluation-guard";
 
@@ -137,3 +138,25 @@ describe("401 de un /yo invalidado (F2-FIX-7)", () => {
     expect(navigate).toHaveBeenCalledWith({ to: "/evaluacion/acceso", replace: true });
   });
 });
+
+describe("inheritEvaluationTicket (F2-FIX-8)", () => {
+  it("la copia derivada conserva el MISMO ticket de la fuente: si la fuente se invalida, la copia también", () => {
+    const source = { assignmentId: 42 };
+    const ticket = evaluationGuard.startRequest();
+    evaluationGuard.register(source, ticket);
+    const copy = inheritEvaluationTicket(source, { ...source, extra: true });
+    expect(evaluationGuard.ticketOf(copy)).toBe(ticket);
+    expect(isTicketCurrent(copy)).toBe(true);
+
+    evaluationGuard.invalidateForVisibility();
+    expect(isTicketCurrent(source)).toBe(false);
+    expect(isTicketCurrent(copy)).toBe(false);
+  });
+
+  it("una fuente sin ticket (dato local) no asigna ninguno a la copia", () => {
+    const copy = inheritEvaluationTicket({ assignmentId: 42 }, { assignmentId: 42 });
+    expect(evaluationGuard.ticketOf(copy)).toBeUndefined();
+    expect(isTicketCurrent(copy)).toBe(true);
+  });
+});
+
