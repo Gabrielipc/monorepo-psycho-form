@@ -5,21 +5,16 @@ import {
   AdminUserListSchema,
   AdminUserSchema,
   AuditLogListSchema,
-  BackupListSchema,
-  BackupSchema,
   NotificationListSchema,
   PermissionListSchema,
   PermissionMatrixSchema,
-  RestoreRequestSchema,
   RoleListSchema,
   SearchResultListSchema,
   type AdminUser,
   type AuditLog,
-  type Backup,
   type Notification,
   type Permission,
   type PermissionMatrix,
-  type RestoreRequest,
   type Role,
   type SearchResult,
 } from "../schemas/admin";
@@ -37,17 +32,6 @@ export interface ListAuditParams {
   entity?: string;
   entityId?: string;
 }
-
-export interface DownloadedBackup {
-  fileName: string;
-  blob: Blob;
-}
-
-const filenameFromDisposition = (disposition: unknown, fallback: string): string => {
-  if (typeof disposition !== "string") return fallback;
-  const match = disposition.match(/filename="?([^"]+)"?/i);
-  return match?.[1] ?? fallback;
-};
 
 export async function listUsers(): Promise<AdminUser[]> {
   const res = await staffClient.get<ApiEnvelope<unknown>>("/users");
@@ -100,35 +84,15 @@ export async function setRolePermissions(roleId: number, permissionIds: number[]
 }
 
 export async function listAudit(params: ListAuditParams = {}): Promise<AuditLog[]> {
-  const res = await staffClient.get<ApiEnvelope<unknown>>("/auditoria", { params });
+  const query: Record<string, string> = {};
+  const entity = params.entity?.trim();
+  const entityId = params.entityId?.trim();
+  if (entity && entityId) {
+    query.entity = entity;
+    query.entityId = entityId;
+  }
+  const res = await staffClient.get<ApiEnvelope<unknown>>("/auditoria", { params: query });
   return parseOrThrow(AuditLogListSchema, unwrap(res), "GET /auditoria");
-}
-
-export async function listBackups(): Promise<Backup[]> {
-  const res = await staffClient.get<ApiEnvelope<unknown>>("/backups");
-  return parseOrThrow(BackupListSchema, unwrap(res), "GET /backups");
-}
-
-export async function createBackup(): Promise<Backup> {
-  const res = await staffClient.post<ApiEnvelope<unknown>>("/backups");
-  return parseOrThrow(BackupSchema, unwrap(res), "POST /backups");
-}
-
-export async function downloadBackup(fileName: string): Promise<DownloadedBackup> {
-  const res = await staffClient.get<Blob>(`/backups/${encodeURIComponent(fileName)}`, {
-    responseType: "blob",
-  });
-  return {
-    fileName: filenameFromDisposition(res.headers["content-disposition"], fileName),
-    blob: res.data,
-  };
-}
-
-export async function requestRestore(fileName: string): Promise<RestoreRequest> {
-  const res = await staffClient.post<ApiEnvelope<unknown>>(
-    `/backups/${encodeURIComponent(fileName)}/restore-requests`,
-  );
-  return parseOrThrow(RestoreRequestSchema, unwrap(res), `POST /backups/${fileName}/restore-requests`);
 }
 
 export async function search(q: string): Promise<SearchResult[]> {

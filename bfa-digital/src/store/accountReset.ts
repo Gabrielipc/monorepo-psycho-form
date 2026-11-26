@@ -1,3 +1,4 @@
+import { safeErrorLog } from "../api/errors";
 import { isRuntimeKey, queryClient } from "../api/queryClient";
 
 /**
@@ -35,12 +36,23 @@ export function resetAccountScopedState(): void {
     try {
       reset();
     } catch (error) {
-      console.error("No se pudo reiniciar un store al cambiar de cuenta", error);
+      console.error("No se pudo reiniciar un store al cambiar de cuenta", safeErrorLog(error));
     }
   }
 
   try {
     for (const key of ACCOUNT_SCOPED_STORAGE_KEYS) localStorage.removeItem(key);
+
+    // Borradores del builder (contenido confidencial: ítems y claves). Hoy viven en sessionStorage; se purga
+    // también localStorage por residuos de versiones anteriores.
+    for (const storage of [sessionStorage, localStorage]) {
+      const draftKeys: string[] = [];
+      for (let i = 0; i < storage.length; i += 1) {
+        const key = storage.key(i);
+        if (key?.startsWith("bfa-instrument-draft:")) draftKeys.push(key);
+      }
+      for (const key of draftKeys) storage.removeItem(key);
+    }
   } catch {
     // storage no disponible: nada que limpiar
   }

@@ -24,11 +24,11 @@ export const ROUTE_PERMISSIONS = {
   "/app/participantes": [PERMISSIONS.PARTICIPANTE_LEER],
   // Instrumentos
   "/app/instrumentos": TEST_LEER,
-  // Sin ítem de menú propio; subir imágenes de ítems es editar el instrumento (TEST_CREAR).
-  "/app/carga-imagenes": [PERMISSIONS.TEST_CREAR],
   // Resultados
   "/app/calificaciones": [PERMISSIONS.CALIFICACION_EJECUTAR],
-  "/app/revision-manual": [PERMISSIONS.CALIFICACION_EJECUTAR],
+  // GET /manual-review/pending admite CALIFICACION_EJECUTAR o RESULTADO_VER; resolver exige CALIFICACION_EJECUTAR
+  // (la pantalla oculta «Revisar» sin él).
+  "/app/revision-manual": [PERMISSIONS.CALIFICACION_EJECUTAR, PERMISSIONS.RESULTADO_VER],
   "/app/resultados": [PERMISSIONS.RESULTADO_VER],
   "/app/dashboard-resultados": [PERMISSIONS.RESULTADO_AGREGADO_VER, PERMISSIONS.RESULTADO_VER],
   "/app/reportes": [PERMISSIONS.REPORTE_EXPORTAR, PERMISSIONS.RESULTADO_VER],

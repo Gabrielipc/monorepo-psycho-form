@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { serverDateTime } from "./datetime";
 
 export const AttemptStatusSchema = z
   .enum(["NO_INICIADO", "EN_PROGRESO", "COMPLETADO", "INTERRUMPIDO", "ANULADO", "DESCONOCIDO"])
@@ -60,7 +61,7 @@ export const ScoreAttemptResultSchema = z
     id: z.number(),
     intentoId: z.number(),
     estrategiaCalificacionId: z.number().nullable().optional(),
-    calculadoEn: z.string(),
+    calculadoEn: serverDateTime,
     calculadoPorId: z.string().nullable().optional(),
     puntajeTotalDirecto: z.number(),
     cantidadItems: z.number(),
@@ -171,7 +172,7 @@ const ResponseDetailSchema = z
     textAnswer: z.string().nullable().optional(),
     numericAnswer: z.number().nullable().optional(),
     timeUsedSeconds: z.number().nullable().optional(),
-    answeredAt: z.string().nullable().optional(),
+    answeredAt: serverDateTime.nullable().optional(),
     graded: z.boolean().nullable().optional(),
     scoreObtained: z.number().nullable().optional(),
     isCorrect: z.boolean().nullable().optional(),
@@ -246,13 +247,13 @@ export const DetailedAttemptResultSchema = z
     carrera: z.string().nullable().optional(),
     cohorte: z.string().nullable().optional(),
     attemptStatus: AttemptStatusSchema,
-    startedAt: z.string().nullable().optional(),
-    finishedAt: z.string().nullable().optional(),
+    startedAt: serverDateTime.nullable().optional(),
+    finishedAt: serverDateTime.nullable().optional(),
     totalTimeSeconds: z.number().nullable().optional(),
     deviceInfo: z.string().nullable().optional(),
     ipAddress: z.string().nullable().optional(),
     totalScore: z.number().nullable().optional(),
-    scoredAt: z.string().nullable().optional(),
+    scoredAt: serverDateTime.nullable().optional(),
     correctCount: z.number().nullable().optional(),
     incorrectCount: z.number().nullable().optional(),
     pendingReviewCount: z.number().nullable().optional(),
@@ -333,7 +334,7 @@ export const GeneratedReportSchema = z
     resultadoId: z.number().nullable().optional(),
     sesionAplicacionId: z.number().nullable().optional(),
     generadoPorId: z.string().nullable().optional(),
-    generadoEn: z.string(),
+    generadoEn: serverDateTime,
     formato: ReportFormatSchema,
     rutaAlmacenamiento: z.string(),
     resumenFiltros: z.string().nullable().optional(),
@@ -370,8 +371,8 @@ export const PendingReviewSchema = z
     status: ManualReviewStatusSchema,
     score: z.number().nullable().optional(),
     comment: z.string().nullable().optional(),
-    createdAt: z.string(),
-    reviewedAt: z.string().nullable().optional(),
+    createdAt: serverDateTime,
+    reviewedAt: serverDateTime.nullable().optional(),
   })
   .loose()
   .transform((w) => ({

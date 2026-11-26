@@ -346,6 +346,8 @@ describe("endpoints de sesiones", () => {
       progress: 0,
       lastActivityAt: null,
       tokenExpiresAt: "2026-11-24T22:00:00.000Z",
+      rejectedAnswersCount: 0,
+      rejectedAnswers: [],
     });
     expect(result[1]?.currentSubtestId).toBe("SUB-01");
     expect(result[1]?.progress).toBe(50);
@@ -354,6 +356,36 @@ describe("endpoints de sesiones", () => {
     expect(result[2]?.tokenExpiresAt).toBeNull();
     expect(result[3]?.linkStatus).toBe("DESCONOCIDO");
     expect(result[3]?.attemptState).toBe("DESCONOCIDO");
+  });
+
+  it("listAssignments parsea rejectedAnswersCount y rejectedAnswers cuando el backend los envía (B17)", async () => {
+    server.use(
+      http.get(`${API}/sesiones/1/asignaciones`, () =>
+        ok([
+          {
+            ...assignmentsFixture[1],
+            rejectedAnswers: [
+              { itemId: 1002, code: "TIEMPO_AGOTADO", rejectedAt: "2026-11-24T14:21:00" },
+              { itemId: 1005, code: "SUBTEST_FINALIZADO", rejectedAt: null },
+            ],
+          },
+          {
+            ...assignmentsFixture[2],
+            rejectedAnswersCount: 3,
+          },
+        ]),
+      ),
+    );
+
+    const result = await listAssignments(1);
+
+    expect(result[0]?.rejectedAnswersCount).toBe(2);
+    expect(result[0]?.rejectedAnswers).toEqual([
+      { itemId: 1002, code: "TIEMPO_AGOTADO", rejectedAt: "2026-11-24T14:21:00.000Z" },
+      { itemId: 1005, code: "SUBTEST_FINALIZADO", rejectedAt: null },
+    ]);
+    expect(result[1]?.rejectedAnswersCount).toBe(3);
+    expect(result[1]?.rejectedAnswers).toEqual([]);
   });
 
   it("listAssignments rechaza progreso fuera de 0-100 con CONTRACT_MISMATCH", async () => {

@@ -9,12 +9,14 @@ import {
   syncStaffAuthFromStorage,
   useStaffAuth,
 } from "./staffAuth";
-import { ADMIN_STORAGE_KEY, useAdminStore } from "./adminStore";
 import { queryClient } from "../api/queryClient";
 import { useParticipantAuth } from "./participantAuth";
 import { requirePermission } from "./requirePermission";
 
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { error: vi.fn(), warning: vi.fn(), dismiss: vi.fn() }) }));
+
+/** Residuo de localStorage del antiguo store de admin: `resetAccountScopedState` debe purgarlo. */
+const LEGACY_ADMIN_STORAGE_KEY = "bfa-digital-admin-storage";
 
 const user = { id: "u1", username: "ana", roles: ["APLICADOR"], permissions: ["SESION_APLICAR", "PARTICIPANTE_LEER"] };
 
@@ -258,33 +260,30 @@ describe("listener global de `storage`", () => {
 });
 
 describe("cambio de cuenta", () => {
-  const seedAdminData = () => {
-    useAdminStore.setState({ generatedTokens: { s1: { p1: "secreto" } } as never, participants: [{ id: "p1" }] as never });
-    localStorage.setItem(ADMIN_STORAGE_KEY, "{}");
+  const seedAccountData = () => {
+    localStorage.setItem(LEGACY_ADMIN_STORAGE_KEY, "{}");
     queryClient.setQueryData(["auth", "me", 1], { id: "alice" });
     queryClient.setQueryData(["otro"], 1);
   };
 
-  it("logout resetea useAdminStore, su persistencia y la caché de React Query", () => {
+  it("logout purga el residuo de localStorage y la caché de React Query", () => {
     useStaffAuth.getState().setSession({ token: "a", expiresAt: null, user });
-    seedAdminData();
+    seedAccountData();
 
     useStaffAuth.getState().clear();
 
-    expect(useAdminStore.getState().participants).toEqual([]);
-    expect(useAdminStore.getState().generatedTokens).toEqual({});
-    expect(localStorage.getItem(ADMIN_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(LEGACY_ADMIN_STORAGE_KEY)).toBeNull();
     expect(queryClient.getQueryData(["auth", "me", 1])).toBeUndefined();
     expect(queryClient.getQueryData(["otro"])).toBeUndefined();
   });
 
   it("setSession con otro usuario descarta los datos de la cuenta anterior", () => {
     useStaffAuth.getState().setSession({ token: "a", expiresAt: null, user });
-    seedAdminData();
+    seedAccountData();
 
     useStaffAuth.getState().setSession({ token: "b", expiresAt: null, user: { ...user, id: "u2" } });
 
-    expect(useAdminStore.getState().participants).toEqual([]);
+    expect(localStorage.getItem(LEGACY_ADMIN_STORAGE_KEY)).toBeNull();
     expect(queryClient.getQueryData(["auth", "me", 1])).toBeUndefined();
   });
 
