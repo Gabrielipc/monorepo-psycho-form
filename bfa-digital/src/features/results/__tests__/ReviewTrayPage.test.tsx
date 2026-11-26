@@ -55,6 +55,15 @@ describe("ReviewTrayPage — estados", () => {
     broken = false;
     fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
     expect(await screen.findByText("Sin revisiones pendientes")).toBeInTheDocument();
+    expect(screen.getByText(/dependen de soporte pendiente en el servidor/i)).toBeInTheDocument();
+  });
+
+  it("con revisiones en la lista no muestra el aviso de soporte pendiente", async () => {
+    setPermissions(["CALIFICACION_EJECUTAR"]);
+    server.use(pendingHandler({ items: pendingFixture }));
+    await renderWithProviders(<ReviewTrayPage />);
+    await screen.findByText("María López");
+    expect(screen.queryByText("Soporte pendiente en el servidor")).not.toBeInTheDocument();
   });
 });
 

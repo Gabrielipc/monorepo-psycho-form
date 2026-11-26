@@ -9,6 +9,7 @@ import { DataTable, type DataTableColumn } from "../../../app/components/ui/data
 import { EmptyState } from "../../../app/components/ui/empty-state";
 import { PageHeader } from "../../../app/components/ui/page-header";
 import { InlineNotice } from "../components/InlineNotice";
+import { PendingServerSupportNotice } from "../components/PendingServerSupportNotice";
 import { errorMessage, formatDateTime } from "../format";
 import { useCanGradeAttempts, useCanViewAttemptResults } from "../permissions";
 import { pendingReviewsQuery } from "../queries";
@@ -110,7 +111,12 @@ export function ReviewTrayPage() {
           loading={query.isPending}
           error={query.isError ? errorMessage(query.error, "No se pudo cargar la bandeja de revisión.") : null}
           onRetry={() => void query.refetch()}
-          emptyState={<EmptyState title="Sin revisiones pendientes" description="No hay respuestas esperando revisión manual." />}
+          emptyState={
+            <div className="space-y-4">
+              <EmptyState title="Sin revisiones pendientes" description="No hay respuestas esperando revisión manual." />
+              <PendingServerSupportNotice />
+            </div>
+          }
           toolbar={
             <p className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
               {query.isSuccess ? `${rows.length} ${rows.length === 1 ? "pendiente" : "pendientes"}` : ""}

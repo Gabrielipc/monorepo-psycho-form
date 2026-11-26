@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { PendingServerSupportNotice } from "../components/PendingServerSupportNotice";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, CircleDashed, XCircle } from "lucide-react";
 
@@ -219,6 +220,8 @@ export function AttemptDetailPage({ attemptId: rawId }: { attemptId: string }) {
           </Button>
         )}
       </div>
+
+      {graded && detail.requiresManualReview && <PendingServerSupportNotice />}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="md:col-span-2">

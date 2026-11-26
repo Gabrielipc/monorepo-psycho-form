@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { validateVersionDocument } from "../schema";
-import { nodeKeyOf } from "../types";
+import { UNSUPPORTED_SCORING_KEY_MESSAGE, validateVersionDocument } from "../schema";
+import { nodeKeyOf, type DocumentAnswerKey } from "../types";
 import { createCleanDocument } from "./fixtures";
 
 describe("validateVersionDocument", () => {
@@ -381,5 +381,71 @@ describe("validateVersionDocument", () => {
     expect(incompleteReport.canApprove).toBe(false);
     expect(incompleteReport.canSave).toBe(true);
     expect(incompleteReport.saveErrors).toEqual([]);
+  });
+
+  describe("claves que la calificación oficial no admite (UNSUPPORTED_SCORING_KEY)", () => {
+    const keyBase: DocumentAnswerKey = {
+      id: null,
+      draftId: "key-x",
+      sourceId: null,
+      status: "CREATED",
+      ruleId: 80,
+      correctOptionDraftId: null,
+      correctOptionId: null,
+      expectedText: null,
+      expectedNumber: null,
+      numericTolerance: null,
+      score: 1,
+      requiresManualReview: false,
+    };
+
+    function withKey(
+      responseType: "OPCION_MULTIPLE" | "NUMERICA" | "TEXTO_ABIERTO",
+      key: Partial<DocumentAnswerKey>,
+    ) {
+      const doc = createCleanDocument();
+      const item = doc.subtests[0]!.items[0]!;
+      item.responseType = responseType;
+      item.answerKey = { ...keyBase, ...key };
+      return doc;
+    }
+
+    it("bloquea aprobar y publicar pero no guardar para OPCION_MULTIPLE con expectedText 'A,B'", () => {
+      const doc = withKey("OPCION_MULTIPLE", { expectedText: "A,B" });
+      const report = validateVersionDocument(doc);
+      const problem = report.errors.find((e) => e.code === "UNSUPPORTED_SCORING_KEY");
+      expect(problem?.message).toBe(UNSUPPORTED_SCORING_KEY_MESSAGE);
+      expect(problem?.blocksSave).toBeFalsy();
+      expect(report.canSave).toBe(true);
+      expect(report.canApprove).toBe(false);
+      expect(report.checklist.find((c) => c.id === "options-keys")?.passed).toBe(false);
+
+      doc.version.status = "APROBADO";
+      expect(validateVersionDocument(doc).canPublish).toBe(false);
+    });
+
+    it("bloquea NUMERICA con valor esperado 42", () => {
+      const report = validateVersionDocument(withKey("NUMERICA", { expectedNumber: 42 }));
+      expect(report.errors.map((e) => e.code)).toContain("UNSUPPORTED_SCORING_KEY");
+      expect(report.canApprove).toBe(false);
+      expect(report.canSave).toBe(true);
+    });
+
+    it("no bloquea con revisión manual ni con una única opción correcta", () => {
+      const manual = validateVersionDocument(
+        withKey("OPCION_MULTIPLE", { expectedText: "A,B", requiresManualReview: true }),
+      );
+      expect(manual.errors.map((e) => e.code)).not.toContain("UNSUPPORTED_SCORING_KEY");
+      expect(manual.canApprove).toBe(true);
+
+      const clean = validateVersionDocument(createCleanDocument());
+      expect(clean.errors.map((e) => e.code)).not.toContain("UNSUPPORTED_SCORING_KEY");
+      expect(clean.canApprove).toBe(true);
+
+      const multipleWithOne = validateVersionDocument(
+        withKey("OPCION_MULTIPLE", { correctOptionDraftId: "opt-40" }),
+      );
+      expect(multipleWithOne.errors.map((e) => e.code)).not.toContain("UNSUPPORTED_SCORING_KEY");
+    });
   });
 });

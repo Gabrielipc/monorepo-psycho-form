@@ -12,6 +12,10 @@ import {
   type VersionDocument,
 } from "./types";
 
+export const UNSUPPORTED_SCORING_KEY_CODE = "UNSUPPORTED_SCORING_KEY";
+export const UNSUPPORTED_SCORING_KEY_MESSAGE =
+  "La calificación automática todavía no admite este tipo de clave; este ítem puntuaría cero. Usa una sola opción correcta o márcalo para revisión manual.";
+
 export interface ValidateDocumentOptions {
   hasUnsavedChanges?: boolean;
   hasActiveScoringRules?: boolean;
@@ -436,6 +440,25 @@ export function validateVersionDocument(
         });
       }
 
+      // El backend (ClaveSimpleScoringService) solo puntúa si la clave tiene una
+      // única opción correcta (opcionCorrecta) que figure entre las seleccionadas.
+      // Claves con texto esperado ("A,B") o valor numérico puntúan siempre cero,
+      // salvo que el ítem se marque para revisión manual. No bloquea guardar.
+      if (
+        activeKey !== null &&
+        !activeKey.requiresManualReview &&
+        !hasValidCorrectOption &&
+        !SINGLE_KEY_OPTION_RESPONSE_TYPES.has(item.responseType)
+      ) {
+        pushProblem(problems, {
+          severity: "error",
+          code: UNSUPPORTED_SCORING_KEY_CODE,
+          message: UNSUPPORTED_SCORING_KEY_MESSAGE,
+          node: itemNode,
+          field: "answerKey",
+        });
+      }
+
       if (
         item.responseType === "TEXTO_ABIERTO" &&
         !activeKey?.requiresManualReview &&
@@ -636,6 +659,7 @@ export function validateVersionDocument(
           "MISSING_EXPECTED_NUMBER",
           "NEGATIVE_NUMERIC_TOLERANCE",
           "INVALID_ANSWER_KEY",
+          UNSUPPORTED_SCORING_KEY_CODE,
         ]),
       ),
       severity: "error",

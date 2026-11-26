@@ -57,6 +57,22 @@ describe("AttemptDetailPage", () => {
     expect(screen.queryByRole("link", { name: /revisión manual/i })).not.toBeInTheDocument();
   });
 
+  it("requiere revisión: avisa que las revisiones automáticas y el puntaje resuelto dependen del servidor; calificado normal no lo muestra", async () => {
+    setPermissions(["RESULTADO_VER"]);
+    server.use(
+      http.get(`${API}/attempts/42/detailed-result`, () => ok({ ...detailedFixture, requiresManualReview: true, pendingReviewCount: 1 })),
+    );
+    const view = await renderWithProviders(<AttemptDetailPage attemptId="42" />);
+    expect(await screen.findByText("Soporte pendiente en el servidor")).toBeInTheDocument();
+    expect(screen.getByText(/dependen de soporte pendiente en el servidor/i)).toBeInTheDocument();
+    view.unmount();
+
+    server.use(http.get(`${API}/attempts/42/detailed-result`, () => ok({ ...detailedFixture, requiresManualReview: false })));
+    await renderWithProviders(<AttemptDetailPage attemptId="42" />);
+    await screen.findByText("Calificado");
+    expect(screen.queryByText("Soporte pendiente en el servidor")).not.toBeInTheDocument();
+  });
+
   it("404: intento no encontrado; 500: error con Reintentar; id inválido: aviso", async () => {
     setPermissions(["RESULTADO_VER"]);
     server.use(http.get(`${API}/attempts/42/detailed-result`, () => fail(404, "Intento no encontrado: 42")));
