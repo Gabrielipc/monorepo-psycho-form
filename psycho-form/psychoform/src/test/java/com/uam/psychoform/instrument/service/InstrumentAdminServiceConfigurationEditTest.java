@@ -573,6 +573,30 @@ class InstrumentAdminServiceConfigurationEditTest {
         inOrder.verify(em).remove(option);
     }
 
+    @Test
+    void saveConfigurationRejectsNonExistentResourceIdWithIllegalArgumentException() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+        when(em.find(RecursoMultimedia.class, 999999L)).thenReturn(null);
+
+        VersionConfigurationRequest.ImageDraft missingResourceImage = new VersionConfigurationRequest.ImageDraft(
+                null, "tmp-img-missing", null, 999999L, VersionConfigurationRequest.DraftStatus.CREATED,
+                1, "Figura", "ENUNCIADO");
+        VersionConfigurationRequest.ItemDraft item = new VersionConfigurationRequest.ItemDraft(
+                null, "tmp-item-1", null, VersionConfigurationRequest.DraftStatus.CREATED,
+                "I-1", TipoItem.TEXTO_E_IMAGEN, TipoRespuesta.TEXTO_ABIERTO, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(missingResourceImage), List.of(), null);
+        VersionConfigurationRequest.SubtestDraft subtest = new VersionConfigurationRequest.SubtestDraft(
+                null, "tmp-sub-1", null, VersionConfigurationRequest.DraftStatus.CREATED,
+                "SUB-1", "Subtest", null, null, 1, null, false, false, true, null, List.of(item));
+
+        assertThatThrownBy(() -> service.saveConfiguration(99L, new VersionConfigurationRequest(List.of(subtest))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Recurso multimedia no encontrado");
+    }
+
     private static Item itemWithVersion(long itemId, long versionId, EstadoVersionTest state) {
         Subtest subtest = subtestWithVersion(1L, versionId, state);
         Item item = new Item();

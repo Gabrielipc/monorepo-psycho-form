@@ -689,6 +689,9 @@ public class InstrumentAdminService {
             if (image.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
                 continue;
             }
+            if (image.resourceId() == null) {
+                throw new IllegalArgumentException("resourceId es requerido para la imagen de " + owner);
+            }
             if (image.order() != null && !imageOrders.add(image.order())) {
                 throw new IllegalArgumentException("Orden de imagen de " + owner + " duplicado: " + image.order());
             }
@@ -845,7 +848,7 @@ public class InstrumentAdminService {
             }
             ImagenItem image = draft.id() == null ? new ImagenItem() : find(ImagenItem.class, draft.id());
             image.setItem(item);
-            image.setRecurso(find(RecursoMultimedia.class, draft.resourceId()));
+            image.setRecurso(findResourceOrBadRequest(draft.resourceId()));
             image.setNumeroOrden(draft.order());
             image.setTextoAlternativo(draft.altText());
             image.setRolImagen(draft.role() == null ? "ENUNCIADO" : draft.role());
@@ -863,13 +866,24 @@ public class InstrumentAdminService {
             }
             ImagenOpcion image = draft.id() == null ? new ImagenOpcion() : find(ImagenOpcion.class, draft.id());
             image.setOpcion(option);
-            image.setRecurso(find(RecursoMultimedia.class, draft.resourceId()));
+            image.setRecurso(findResourceOrBadRequest(draft.resourceId()));
             image.setNumeroOrden(draft.order());
             image.setTextoAlternativo(draft.altText());
             if (draft.id() == null) {
                 em.persist(image);
             }
         }
+    }
+
+    private RecursoMultimedia findResourceOrBadRequest(Long resourceId) {
+        if (resourceId == null) {
+            throw new IllegalArgumentException("resourceId es requerido para la imagen");
+        }
+        RecursoMultimedia resource = em.find(RecursoMultimedia.class, resourceId);
+        if (resource == null) {
+            throw new IllegalArgumentException("Recurso multimedia no encontrado: " + resourceId);
+        }
+        return resource;
     }
 
     private void deleteAnswerKey(Item item, VersionConfigurationRequest.AnswerKeyDraft draft) {

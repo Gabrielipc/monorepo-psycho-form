@@ -1,5 +1,6 @@
 package com.uam.psychoform.instrument.service;
 
+import com.uam.psychoform.instrument.dto.ImageResourceUploadResponse;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
 import com.uam.psychoform.instrument.model.ImagenItem;
 import com.uam.psychoform.instrument.model.ImagenOpcion;
@@ -56,6 +57,30 @@ public class InstrumentImageService {
         this.currentActor = currentActor;
         this.storage = storage;
         this.clock = clock;
+    }
+
+    @Transactional
+    @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
+    public ImageResourceUploadResponse uploadLooseResource(MultipartFile file, String altText, String idempotencyKey)
+            throws IOException {
+        String uploadKey = normalizeIdempotencyKey(idempotencyKey);
+        byte[] bytes = validatedBytes(file);
+        String hash = sha256(bytes);
+        RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
+        if (existing != null) {
+            return looseResponse(existing);
+        }
+        String key = looseStorageKey(file.getOriginalFilename());
+        storage.putObject(key, normalizedContentType(file), bytes);
+        try {
+            RecursoMultimedia resource = resource(file, bytes, hash, key, uploadKey);
+            em.persist(resource);
+            em.flush();
+            return looseResponse(resource);
+        } catch (RuntimeException ex) {
+            deleteBestEffort(key);
+            throw ex;
+        }
     }
 
     @Transactional
@@ -412,6 +437,12 @@ public class InstrumentImageService {
                 resource.getHashIntegridad(), order, altText, role, resource.getClaveSubida());
     }
 
+    private ImageResourceUploadResponse looseResponse(RecursoMultimedia resource) {
+        return new ImageResourceUploadResponse(resource.getId(), resource.getRutaAlmacenamiento(),
+                resource.getTipoMime(), resource.getNombreArchivo(), resource.getTamanoBytes(),
+                resource.getHashIntegridad(), resource.getClaveSubida());
+    }
+
     private VersionTest requireDraft(long versionId) {
         VersionTest version = versions.findByIdForUpdate(versionId)
                 .orElseThrow(() -> new EntityNotFoundException("Version no encontrada: " + versionId));
@@ -491,6 +522,10 @@ public class InstrumentImageService {
 
     private String storageKey(String scope, long ownerId, String filename) {
         return "test-config/" + scope + "/" + ownerId + "/" + UUID.randomUUID() + "-" + sanitize(filename);
+    }
+
+    private String looseStorageKey(String filename) {
+        return "test-config/resources/" + UUID.randomUUID() + "-" + sanitize(filename);
     }
 
     private String sanitize(String filename) {

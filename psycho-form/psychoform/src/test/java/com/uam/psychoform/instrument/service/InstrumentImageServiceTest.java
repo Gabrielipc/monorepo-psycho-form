@@ -391,6 +391,79 @@ class InstrumentImageServiceTest {
         verify(storage, never()).deleteObject(anyString());
     }
 
+    @Test
+    void uploadLooseResourceGuardaSoloRecursoMultimediaSinCrearVinculos() throws IOException {
+        Usuario actor = new Usuario();
+        actor.setId(ACTOR_ID);
+        when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
+        when(users.findById(ACTOR_ID)).thenReturn(Optional.of(actor));
+        when(storage.putObject(anyString(), anyString(), any())).thenReturn(new StoredObject("stored-key", "etag"));
+        TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
+        when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
+                RecursoMultimedia.class)).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", "loose-key-1")).thenReturn(resourceQuery);
+        when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
+        when(resourceQuery.getResultList()).thenReturn(java.util.List.of());
+
+        MockMultipartFile file = new MockMultipartFile("file", "suelta.png", "image/png", "loose".getBytes());
+        var response = service.uploadLooseResource(file, "alt ignorado", "loose-key-1");
+
+        assertThat(response.storagePath()).startsWith("test-config/resources/");
+        assertThat(response.originalFileName()).isEqualTo("suelta.png");
+        assertThat(response.mimeType()).isEqualTo("image/png");
+        assertThat(response.sizeBytes()).isEqualTo(5L);
+        assertThat(response.sha256()).isNotBlank();
+        assertThat(response.uploadKey()).isEqualTo("loose-key-1");
+
+        ArgumentCaptor<Object> persisted = ArgumentCaptor.forClass(Object.class);
+        verify(em, Mockito.times(1)).persist(persisted.capture());
+        assertThat(persisted.getValue()).isInstanceOf(RecursoMultimedia.class);
+        assertThat(((RecursoMultimedia) persisted.getValue()).getClaveSubida()).isEqualTo("loose-key-1");
+    }
+
+    @Test
+    void uploadLooseResourceConIdempotencyKeyRepetidaDevuelveMismoRecursoSinResubir() throws Exception {
+        byte[] content = "loose-bytes".getBytes();
+        String hash = java.util.HexFormat.of()
+                .formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content));
+        RecursoMultimedia existing = new RecursoMultimedia();
+        existing.setId(91L);
+        existing.setRutaAlmacenamiento("test-config/resources/91-suelta.png");
+        existing.setNombreArchivo("suelta.png");
+        existing.setTipoMime("image/png");
+        existing.setTamanoBytes((long) content.length);
+        existing.setHashIntegridad(hash);
+        existing.setClaveSubida("loose-key-dup");
+
+        TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
+        when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
+                RecursoMultimedia.class)).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", "loose-key-dup")).thenReturn(resourceQuery);
+        when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
+        when(resourceQuery.getResultList()).thenReturn(java.util.List.of(existing));
+
+        MockMultipartFile file = new MockMultipartFile("file", "suelta.png", "image/png", content);
+        var response = service.uploadLooseResource(file, null, "loose-key-dup");
+
+        assertThat(response.resourceId()).isEqualTo(91L);
+        assertThat(response.uploadKey()).isEqualTo("loose-key-dup");
+        verify(storage, never()).putObject(anyString(), anyString(), any());
+        verify(em, never()).persist(any());
+    }
+
+    @Test
+    void uploadLooseResourceRechazaArchivoMayorA25MbSinSubirAStorage() {
+        MockMultipartFile oversized = Mockito.mock(MockMultipartFile.class);
+        when(oversized.isEmpty()).thenReturn(false);
+        when(oversized.getContentType()).thenReturn("image/png");
+        when(oversized.getSize()).thenReturn(25L * 1024L * 1024L + 1L);
+
+        assertThatThrownBy(() -> service.uploadLooseResource(oversized, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("25MB");
+        verify(storage, never()).putObject(anyString(), anyString(), any());
+    }
+
     private static Item itemWithVersion(long itemId, long versionId, EstadoVersionTest state) {
         VersionTest version = new VersionTest();
         version.setId(versionId);

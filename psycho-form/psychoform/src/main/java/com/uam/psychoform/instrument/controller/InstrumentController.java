@@ -167,6 +167,16 @@ public class InstrumentController {
         return ApiResponse.ok(EntityView.of(admin.updateOption(id, toCommand(request))));
     }
 
+    @PostMapping(value = "/images/resources", consumes = "multipart/form-data")
+    @PreAuthorize(SecurityPermissions.TEST_CREAR)
+    public ApiResponse<?> uploadImageResource(
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(required = false) String altText,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
+            throws java.io.IOException {
+        return ApiResponse.ok(EntityView.of(images.uploadLooseResource(file, altText, idempotencyKey)));
+    }
+
     @PostMapping(value = "/items/{id}/images", consumes = "multipart/form-data")
     @PreAuthorize(SecurityPermissions.TEST_CREAR)
     public ApiResponse<?> itemImage(@PathVariable Long id, @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
