@@ -191,6 +191,132 @@ class InstrumentConfigurationReorderIntegrationTest {
         assertThat(subtestOrder(scenario.subtestIds().get(1))).isEqualTo(2);
     }
 
+    @Test
+    void deleteOptionAndRecreateSameCodeAtDifferentOrderReturns200WithSingleLiveOption() throws Exception {
+        scenario = seed(1, 1, 3);
+
+        OptionDraft opt1 = optionDraft(scenario.optionIds().get(0), DraftStatus.EXISTING, "OPT-1", 1);
+        OptionDraft opt2 = optionDraft(scenario.optionIds().get(1), DraftStatus.EXISTING, "OPT-2", 2);
+        OptionDraft deletedOpt3 = optionDraft(scenario.optionIds().get(2), DraftStatus.DELETED, "OPT-3", 3);
+        OptionDraft recreatedOpt3 = optionDraft(null, DraftStatus.CREATED, "OPT-3", 5);
+        ItemDraft item1 = updatedItem(scenario.itemIds().get(0), "IT-1", 1,
+                List.of(opt1, opt2, deletedOpt3, recreatedOpt3));
+        SubtestDraft sub1 = updatedSubtest(scenario.subtestIds().get(0), "SUB-1", 1, List.of(item1));
+
+        mvc.perform(post("/test-versions/{id}/configuration", scenario.versionId())
+                .header("Authorization", bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(new VersionConfigurationRequest(List.of(sub1)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        List<Long> matchingIds = jdbc.queryForList(
+                "select opcion_id from opcion_item where item_id = ? and codigo_opcion = ?",
+                Long.class, scenario.itemIds().get(0), "OPT-3");
+        assertThat(matchingIds).hasSize(1);
+        assertThat(matchingIds.getFirst()).isNotEqualTo(scenario.optionIds().get(2));
+        assertThat(optionOrder(matchingIds.getFirst())).isEqualTo(5);
+    }
+
+    @Test
+    void deleteItemAndRecreateSameCodeAtDifferentOrderReturns200WithSingleLiveItem() throws Exception {
+        scenario = seed(1, 2, 0);
+
+        ItemDraft item1 = itemDraft(scenario.itemIds().get(0), DraftStatus.EXISTING, "IT-1", 1, List.of());
+        ItemDraft deletedItem2 = itemDraft(scenario.itemIds().get(1), DraftStatus.DELETED, "IT-2", 2, List.of());
+        ItemDraft recreatedItem2 = itemDraft(null, DraftStatus.CREATED, "IT-2", 5, List.of());
+        SubtestDraft sub1 = updatedSubtest(scenario.subtestIds().get(0), "SUB-1", 1,
+                List.of(item1, deletedItem2, recreatedItem2));
+
+        mvc.perform(post("/test-versions/{id}/configuration", scenario.versionId())
+                .header("Authorization", bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(new VersionConfigurationRequest(List.of(sub1)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        List<Long> matchingIds = jdbc.queryForList(
+                "select item_id from item where subtest_id = ? and codigo_item = ?",
+                Long.class, scenario.subtestIds().get(0), "IT-2");
+        assertThat(matchingIds).hasSize(1);
+        assertThat(matchingIds.getFirst()).isNotEqualTo(scenario.itemIds().get(1));
+        assertThat(itemOrder(matchingIds.getFirst())).isEqualTo(5);
+    }
+
+    @Test
+    void deleteSubtestAndRecreateSameCodeAtDifferentOrderReturns200WithSingleLiveSubtest() throws Exception {
+        scenario = seed(2, 0, 0);
+
+        SubtestDraft sub1 = subtestDraft(scenario.subtestIds().get(0), DraftStatus.EXISTING, "SUB-1", 1, List.of());
+        SubtestDraft deletedSub2 = subtestDraft(scenario.subtestIds().get(1), DraftStatus.DELETED, "SUB-2", 2, List.of());
+        SubtestDraft recreatedSub2 = subtestDraft(null, DraftStatus.CREATED, "SUB-2", 5, List.of());
+
+        mvc.perform(post("/test-versions/{id}/configuration", scenario.versionId())
+                .header("Authorization", bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(new VersionConfigurationRequest(List.of(sub1, deletedSub2, recreatedSub2)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        List<Long> matchingIds = jdbc.queryForList(
+                "select subtest_id from subtest where version_test_id = ? and codigo_subtest = ?",
+                Long.class, scenario.versionId(), "SUB-2");
+        assertThat(matchingIds).hasSize(1);
+        assertThat(matchingIds.getFirst()).isNotEqualTo(scenario.subtestIds().get(1));
+        assertThat(subtestOrder(matchingIds.getFirst())).isEqualTo(5);
+    }
+
+    @Test
+    void duplicateOptionCodeAtCommitReturns409AndRollsBack() throws Exception {
+        scenario = seed(1, 1, 2);
+
+        OptionDraft duplicateOpt2 = optionDraft(null, DraftStatus.CREATED, "OPT-2", 5);
+        ItemDraft item1 = updatedItem(scenario.itemIds().get(0), "IT-1", 1, List.of(duplicateOpt2));
+        SubtestDraft sub1 = updatedSubtest(scenario.subtestIds().get(0), "SUB-1", 1, List.of(item1));
+
+        mvc.perform(post("/test-versions/{id}/configuration", scenario.versionId())
+                .header("Authorization", bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(new VersionConfigurationRequest(List.of(sub1)))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("CONFLICT"));
+
+        Integer totalOptions = jdbc.queryForObject(
+                "select count(*) from opcion_item where item_id = ?",
+                Integer.class, scenario.itemIds().get(0));
+        Integer opt2Count = jdbc.queryForObject(
+                "select count(*) from opcion_item where item_id = ? and codigo_opcion = ?",
+                Integer.class, scenario.itemIds().get(0), "OPT-2");
+        assertThat(totalOptions).isEqualTo(2);
+        assertThat(opt2Count).isEqualTo(1);
+    }
+
+    @Test
+    void duplicateItemCodeAtCommitReturns409AndRollsBack() throws Exception {
+        scenario = seed(1, 2, 0);
+
+        ItemDraft duplicateItem2 = itemDraft(null, DraftStatus.CREATED, "IT-2", 5, List.of());
+        SubtestDraft sub1 = updatedSubtest(scenario.subtestIds().get(0), "SUB-1", 1, List.of(duplicateItem2));
+
+        mvc.perform(post("/test-versions/{id}/configuration", scenario.versionId())
+                .header("Authorization", bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(new VersionConfigurationRequest(List.of(sub1)))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("CONFLICT"));
+
+        Integer totalItems = jdbc.queryForObject(
+                "select count(*) from item where subtest_id = ?",
+                Integer.class, scenario.subtestIds().get(0));
+        Integer item2Count = jdbc.queryForObject(
+                "select count(*) from item where subtest_id = ? and codigo_item = ?",
+                Integer.class, scenario.subtestIds().get(0), "IT-2");
+        assertThat(totalItems).isEqualTo(2);
+        assertThat(item2Count).isEqualTo(1);
+    }
+
     private Scenario seed(int subtestCount, int itemCountInFirstSubtest, int optionCountInFirstItem) {
         return new TransactionTemplate(txManager).execute(status -> {
             String suffix = UUID.randomUUID().toString().substring(0, 8);
@@ -249,18 +375,35 @@ class InstrumentConfigurationReorderIntegrationTest {
     }
 
     private static SubtestDraft updatedSubtest(long id, String code, int order, List<ItemDraft> items) {
-        return new SubtestDraft(id, "sub-" + id, null, DraftStatus.UPDATED, code, "Subtest " + code,
-                null, null, order, null, false, false, true, null, items);
+        return subtestDraft(id, DraftStatus.UPDATED, code, order, items);
     }
 
     private static ItemDraft updatedItem(long id, String code, int order, List<OptionDraft> options) {
-        return new ItemDraft(id, "item-" + id, null, DraftStatus.UPDATED, code, TipoItem.SOLO_TEXTO,
+        return itemDraft(id, DraftStatus.UPDATED, code, order, options);
+    }
+
+    private static OptionDraft updatedOption(long id, String code, int order) {
+        return optionDraft(id, DraftStatus.UPDATED, code, order);
+    }
+
+    private static SubtestDraft subtestDraft(Long id, DraftStatus status, String code, int order,
+            List<ItemDraft> items) {
+        String draftId = id == null ? "sub-new-" + code : "sub-" + id;
+        return new SubtestDraft(id, draftId, null, status, code, "Subtest " + code,
+                null, null, order, null, false, false, true, null, items);
+    }
+
+    private static ItemDraft itemDraft(Long id, DraftStatus status, String code, int order,
+            List<OptionDraft> options) {
+        String draftId = id == null ? "item-new-" + code : "item-" + id;
+        return new ItemDraft(id, draftId, null, status, code, TipoItem.SOLO_TEXTO,
                 TipoRespuesta.OPCION_UNICA, "Pregunta " + code, null, order, BigDecimal.ONE, null, true, true,
                 List.of(), options, null);
     }
 
-    private static OptionDraft updatedOption(long id, String code, int order) {
-        return new OptionDraft(id, "opt-" + id, null, DraftStatus.UPDATED, code, "Opcion " + code,
+    private static OptionDraft optionDraft(Long id, DraftStatus status, String code, int order) {
+        String draftId = id == null ? "opt-new-" + code : "opt-" + id;
+        return new OptionDraft(id, draftId, null, status, code, "Opcion " + code,
                 order, BigDecimal.ONE, List.of());
     }
 }

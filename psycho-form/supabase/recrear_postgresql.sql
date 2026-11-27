@@ -2540,4 +2540,101 @@ CREATE INDEX IF NOT EXISTS idx_intento_estado_fin
 -- seed.sql
 -- Seed data is managed by versioned migrations in supabase/migrations.
 
+-- migrations/20261126000700_codigos_deferrable.sql
+-- Permite reutilizar codigos en el arbol de configuracion dentro de una misma
+-- transaccion (borrar y crear en el mismo guardado), posponiendo la validacion
+-- de unicidad hasta el COMMIT.
+DO $$
+DECLARE
+    v_spec RECORD;
+    v_conname TEXT;
+    v_ya_deferrable BOOLEAN;
+    v_tiene_fk BOOLEAN;
+BEGIN
+    FOR v_spec IN
+        SELECT *
+        FROM (VALUES
+            ('subtest',                'version_test_id',     'codigo_subtest',   'uq_subtest_version_codigo'),
+            ('dimension_resultado',    'version_test_id',     'codigo_dimension', 'uq_dimension_version_codigo'),
+            ('item',                   'subtest_id',          'codigo_item',      'uq_item_subtest_codigo'),
+            ('opcion_item',            'item_id',             'codigo_opcion',    'uq_opcion_item_codigo'),
+            ('rubrica_evaluacion',     'version_test_id',     'codigo_rubrica',   'uq_rubrica_version_codigo'),
+            ('criterio_rubrica',       'rubrica_id',          'codigo_criterio',  'uq_criterio_rubrica_codigo'),
+            ('nivel_criterio_rubrica', 'criterio_rubrica_id', 'codigo_nivel',     'uq_nivel_criterio_codigo')
+        ) AS t(tabla, col1, col2, nuevo_nombre)
+    LOOP
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND c.condeferrable
+              AND c.condeferred
+              AND (
+                  SELECT array_agg(a.attname::text ORDER BY u.ord)
+                  FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+              ) = ARRAY[v_spec.col1, v_spec.col2]
+        ) INTO v_ya_deferrable;
+
+        IF v_ya_deferrable THEN
+            CONTINUE;
+        END IF;
+
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            JOIN pg_constraint fk ON fk.confrelid = cl.oid AND fk.contype = 'f'
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND (
+                  SELECT array_agg(a.attname::text ORDER BY u.ord)
+                  FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+              ) = ARRAY[v_spec.col1, v_spec.col2]
+              AND fk.confkey = c.conkey
+        ) INTO v_tiene_fk;
+
+        IF v_tiene_fk THEN
+            RAISE NOTICE 'Se omite %.% porque es referenciada por una FK', v_spec.tabla, v_spec.nuevo_nombre;
+            CONTINUE;
+        END IF;
+
+        FOR v_conname IN
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND (
+                  c.conname = v_spec.nuevo_nombre
+                  OR (
+                      SELECT array_agg(a.attname::text ORDER BY u.ord)
+                      FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+                  ) = ARRAY[v_spec.col1, v_spec.col2]
+              )
+        LOOP
+            EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', v_spec.tabla, v_conname);
+        END LOOP;
+
+        EXECUTE format(
+            'ALTER TABLE public.%I ADD CONSTRAINT %I UNIQUE (%I, %I) DEFERRABLE INITIALLY DEFERRED',
+            v_spec.tabla,
+            v_spec.nuevo_nombre,
+            v_spec.col1,
+            v_spec.col2
+        );
+    END LOOP;
+END;
+$$;
+
 COMMIT;
