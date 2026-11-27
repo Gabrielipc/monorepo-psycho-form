@@ -214,6 +214,12 @@ public class ResultQueryService {
                             .map(sel -> sel.getOpcion().getId())
                             .toList();
 
+                    // Un item pendiente de revision manual no es incorrecto: la marca (isCorrect) queda en null hasta
+                    // que se resuelva. La marca de revision sale de la calificacion cuando existe.
+                    boolean pendingReview = cal != null ? Boolean.TRUE.equals(cal.getRequiereRevisionManual())
+                            : Boolean.TRUE.equals(resp.getRequiereRevisionManual());
+                    Boolean responseCorrect = cal == null || pendingReview ? null : cal.getEsCorrecta();
+
                     respDetail = new ResponseDetailView(
                             resp.getId(),
                             resp.getRespuestaTextoAbierto(),
@@ -222,8 +228,8 @@ public class ResultQueryService {
                             resp.getRespondidoEn(),
                             cal != null,
                             cal != null ? cal.getPuntajeObtenido() : null,
-                            cal != null ? cal.getEsCorrecta() : null,
-                            resp.getRequiereRevisionManual(),
+                            responseCorrect,
+                            pendingReview,
                             cal != null ? cal.getObservacion() : null
                     );
                 }

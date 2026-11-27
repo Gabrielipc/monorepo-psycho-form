@@ -297,15 +297,38 @@ class ManualReviewServiceTest {
         review.setRespuesta(answerGraph(44L));
         review.setEstado(EstadoRevisionManual.PENDIENTE);
         review.setCreadoEn(CLOCK.instant().atZone(ZoneOffset.UTC).toLocalDateTime());
-        when(reviews.findPendingWithAnswerContext(EstadoRevisionManual.PENDIENTE)).thenReturn(List.of(review));
+        when(reviews.findPendingWithAnswerContext(List.of(EstadoRevisionManual.PENDIENTE, EstadoRevisionManual.OBSERVADO)))
+                .thenReturn(List.of(review));
 
         assertThat(service.pending()).singleElement().satisfies(view -> {
             assertThat(view.reviewId()).isEqualTo(55L);
             assertThat(view.answerId()).isEqualTo(44L);
             assertThat(view.participantName()).isEqualTo("Ana Lopez");
         });
-        verify(reviews).findPendingWithAnswerContext(EstadoRevisionManual.PENDIENTE);
+        verify(reviews).findPendingWithAnswerContext(List.of(EstadoRevisionManual.PENDIENTE, EstadoRevisionManual.OBSERVADO));
         verify(reviews, never()).findByEstadoOrderByCreadoEnAsc(EstadoRevisionManual.PENDIENTE);
+    }
+
+    @Test
+    void unaRevisionObservadaSigueEnLaBandejaConSuEstadoYAlAprobarlaSale() {
+        Escenario e = escenario(1);
+        e.reviewerStubs();
+        // Repositorio en memoria: la bandeja filtra por los estados pedidos, como la consulta real.
+        when(reviews.findPendingWithAnswerContext(Mockito.anyCollection())).thenAnswer(invocation -> {
+            java.util.Collection<EstadoRevisionManual> estados = invocation.getArgument(0);
+            return e.reviews.stream().filter(r -> estados.contains(r.getEstado())).toList();
+        });
+        assertThat(service.pending()).hasSize(1);
+
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(null, "falta detalle", false));
+
+        assertThat(service.pending()).singleElement().satisfies(view -> assertThat(view.status()).isEqualTo("OBSERVADO"));
+        assertThat(e.result.getRequiereRevisionManual()).isTrue();
+
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("3.00"), "ok", true));
+
+        assertThat(service.pending()).isEmpty();
+        assertThat(e.result.getRequiereRevisionManual()).isFalse();
     }
 
     private static RespuestaItem answerGraph(Long answerId) {

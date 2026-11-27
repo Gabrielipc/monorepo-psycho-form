@@ -31,6 +31,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class ManualReviewService {
+    private static final List<EstadoRevisionManual> INBOX_STATES = List.of(EstadoRevisionManual.PENDIENTE,
+            EstadoRevisionManual.OBSERVADO);
+
     private final RevisionManualRespuestaRepository reviews;
     private final RespuestaItemRepository answers;
     private final IntentoTestRepository attempts;
@@ -60,9 +63,13 @@ public class ManualReviewService {
         this.clock = clock;
     }
 
+    /**
+     * Bandeja de revision: PENDIENTE y OBSERVADO (una observada requiere otra decision del revisor). Las REVISADO
+     * salen de la bandeja.
+     */
     @PreAuthorize(SecurityPermissions.CALIFICACION_EJECUTAR + " or " + SecurityPermissions.RESULTADO_VER)
     public List<PendingReviewView> pending() {
-        return reviews.findPendingWithAnswerContext(EstadoRevisionManual.PENDIENTE).stream()
+        return reviews.findPendingWithAnswerContext(INBOX_STATES).stream()
                 .map(this::toView)
                 .toList();
     }

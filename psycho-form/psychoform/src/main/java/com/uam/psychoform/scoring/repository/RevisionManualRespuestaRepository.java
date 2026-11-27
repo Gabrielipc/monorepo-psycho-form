@@ -24,10 +24,10 @@ public interface RevisionManualRespuestaRepository extends JpaRepository<Revisio
             join fetch attempt.asignacion assignment
             join fetch assignment.participante
             join fetch answer.item
-            where review.estado = :estado
+            where review.estado in :estados
             order by review.creadoEn asc
             """)
-    List<RevisionManualRespuesta> findPendingWithAnswerContext(EstadoRevisionManual estado);
+    List<RevisionManualRespuesta> findPendingWithAnswerContext(Collection<EstadoRevisionManual> estados);
 
     @Query("""
             select review.respuesta.intento.id, count(review)
