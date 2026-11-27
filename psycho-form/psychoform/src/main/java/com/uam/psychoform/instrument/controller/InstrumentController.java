@@ -24,7 +24,7 @@ public class InstrumentController {
     }
 
     @GetMapping("/tests")
-    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    @PreAuthorize(SecurityPermissions.INSTRUMENTO_CATALOGO_LEER)
     public ApiResponse<?> tests() {
         return ApiResponse.ok(EntityView.of(admin.listTests()));
     }
@@ -37,7 +37,7 @@ public class InstrumentController {
     }
 
     @GetMapping("/tests/{id}/versions")
-    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    @PreAuthorize(SecurityPermissions.INSTRUMENTO_CATALOGO_LEER)
     public ApiResponse<?> versions(@PathVariable Long id) {
         return ApiResponse.ok(EntityView.of(admin.listVersions(id)));
     }
@@ -74,7 +74,7 @@ public class InstrumentController {
     }
 
     @GetMapping("/test-versions/{id}/subtests")
-    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    @PreAuthorize(SecurityPermissions.INSTRUMENTO_CATALOGO_LEER)
     public ApiResponse<?> getSubtests(@PathVariable Long id) {
         return ApiResponse.ok(EntityView.of(admin.listSubtests(id)));
     }

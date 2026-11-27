@@ -48,9 +48,14 @@ public class InstrumentAdminService {
         this.clock = clock;
     }
 
-    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    @PreAuthorize(SecurityPermissions.INSTRUMENTO_CATALOGO_LEER)
     public List<TestPsicologico> listTests() {
-        return em.createQuery("select t from TestPsicologico t", TestPsicologico.class).getResultList();
+        if (currentActor.canReadFullInstruments()) {
+            return em.createQuery("select t from TestPsicologico t", TestPsicologico.class).getResultList();
+        }
+        return em.createQuery("select t from TestPsicologico t where exists ("
+                + "select 1 from VersionTest v where v.test = t and v.estado = :publicado)", TestPsicologico.class)
+                .setParameter("publicado", EstadoVersionTest.PUBLICADO).getResultList();
     }
 
     @Transactional
@@ -67,10 +72,15 @@ public class InstrumentAdminService {
         return test;
     }
 
-    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    @PreAuthorize(SecurityPermissions.INSTRUMENTO_CATALOGO_LEER)
     public List<VersionTest> listVersions(long testId) {
-        return em.createQuery("select v from VersionTest v where v.test.id = :testId", VersionTest.class)
-                .setParameter("testId", testId).getResultList();
+        if (currentActor.canReadFullInstruments()) {
+            return em.createQuery("select v from VersionTest v where v.test.id = :testId", VersionTest.class)
+                    .setParameter("testId", testId).getResultList();
+        }
+        return em.createQuery("select v from VersionTest v where v.test.id = :testId and v.estado = :publicado",
+                VersionTest.class).setParameter("testId", testId)
+                .setParameter("publicado", EstadoVersionTest.PUBLICADO).getResultList();
     }
 
     @Transactional
@@ -429,8 +439,14 @@ public class InstrumentAdminService {
         return version;
     }
 
-    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    @PreAuthorize(SecurityPermissions.INSTRUMENTO_CATALOGO_LEER)
     public List<Subtest> listSubtests(long versionId) {
+        if (!currentActor.canReadFullInstruments()) {
+            VersionTest version = em.find(VersionTest.class, versionId);
+            if (version == null || version.getEstado() != EstadoVersionTest.PUBLICADO) {
+                throw new EntityNotFoundException("Version no encontrada: " + versionId);
+            }
+        }
         return em.createQuery("SELECT s FROM Subtest s WHERE s.versionTest.id = :versionId ORDER BY s.numeroOrden ASC", Subtest.class)
                 .setParameter("versionId", versionId)
                 .getResultList();
