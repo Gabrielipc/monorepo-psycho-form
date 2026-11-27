@@ -1,109 +1,119 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
+import { ClipboardCheck, Plus } from "lucide-react";
+
+import { Badge } from "../../../app/components/ui/badge";
 import { Button } from "../../../app/components/ui/button";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from "../../../app/components/ui/dialog";
-import { Input } from "../../../app/components/ui/input";
-import { Textarea } from "../../../app/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../../app/components/ui/table";
-import { captureAccountScope } from "../../../store/accountScope";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../app/components/ui/table";
 import { PERMISSIONS } from "../../../store/permissions";
 import { useStaffAuth } from "../../../store/staffAuth";
-import { useCreateTest } from "../mutations";
 import { useInstrumentPermissions } from "../permissions";
 import { testsListQuery } from "../queries";
-
-function NewTestDialog({ onClose }: { onClose: () => void }) {
-  const [code, setCode] = useState("");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const create = useCreateTest();
-  const navigate = useNavigate();
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (create.isPending || !code.trim() || !name.trim()) return;
-    const scope = captureAccountScope();
-    try {
-      const test = await create.mutateAsync({ code, name, description: description.trim() || null });
-      if (scope.isCurrent()) {
-        onClose();
-        void navigate({ to: "/app/instrumentos/$versionId", params: { versionId: String(test.id) } });
-      }
-    } catch {
-      // El error de la mutación se muestra en el formulario.
-    }
-  }
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open && !create.isPending) onClose(); }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Nuevo test</DialogTitle>
-          <DialogDescription>Después de crear el test podrás agregar su primera versión.</DialogDescription>
-        </DialogHeader>
-        <form onSubmit={(event) => void submit(event)} className="space-y-4">
-          <label className="grid gap-1 text-sm">
-            Código
-            <Input value={code} onChange={(event) => setCode(event.target.value)} required disabled={create.isPending} />
-          </label>
-          <label className="grid gap-1 text-sm">
-            Nombre
-            <Input value={name} onChange={(event) => setName(event.target.value)} required disabled={create.isPending} />
-          </label>
-          <label className="grid gap-1 text-sm">
-            Descripción
-            <Textarea value={description} onChange={(event) => setDescription(event.target.value)} disabled={create.isPending} />
-          </label>
-          {create.isError && <p role="alert" className="text-sm text-destructive">{create.error.message}</p>}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={create.isPending}>Cancelar</Button>
-            <Button type="submit" disabled={create.isPending || !code.trim() || !name.trim()}>
-              {create.isPending ? "Creando…" : "Crear test"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
+import { NewTestWizardDialog } from "./NewTestWizardDialog";
 
 export function InstrumentList() {
   const query = useQuery(testsListQuery());
   const { canEdit } = useInstrumentPermissions();
-  const canReview = useStaffAuth((state) => state.user?.permissions.includes(PERMISSIONS.CALIFICACION_EJECUTAR));
+  const canReview = useStaffAuth((state) =>
+    state.user?.permissions.includes(PERMISSIONS.CALIFICACION_EJECUTAR),
+  );
   const [createOpen, setCreateOpen] = useState(false);
 
   return (
     <section className="space-y-4" aria-label="Instrumentos">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Instrumentos</h1>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">Instrumentos</h1>
+          <p className="text-xs text-muted-foreground">
+            Administra tus tests psicométricos, versiones, subtests, ítems y baremos.
+          </p>
+        </div>
         <div className="flex flex-wrap gap-2">
-          {canReview && <Button variant="outline" asChild><Link to="/app/revision-manual">Revisión manual</Link></Button>}
-          {canEdit && <Button onClick={() => setCreateOpen(true)}>Nuevo test</Button>}
+          {canReview && (
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/app/revision-manual">
+                <ClipboardCheck className="size-4" aria-hidden="true" />
+                <span>Revisión manual</span>
+              </Link>
+            </Button>
+          )}
+          {canEdit && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" aria-hidden="true" />
+              <span>Nuevo test</span>
+            </Button>
+          )}
         </div>
       </div>
-      {query.isPending ? <p role="status">Cargando instrumentos…</p> : query.isError ? (
-        <div role="alert" className="space-y-2">
+
+      {query.isPending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Cargando instrumentos…
+        </p>
+      ) : query.isError ? (
+        <div role="alert" className="space-y-2 rounded-lg border border-status-danger-border bg-status-danger-bg p-4 text-sm text-status-danger-fg">
           <p>{query.error.message}</p>
-          <Button variant="outline" onClick={() => void query.refetch()}>Reintentar</Button>
+          <Button variant="outline" size="sm" onClick={() => void query.refetch()}>
+            Reintentar
+          </Button>
         </div>
-      ) : query.data.length === 0 ? <p role="status">Todavía no hay tests registrados.</p> : (
-        <div className="rounded-lg border bg-card">
+      ) : query.data.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card p-8 text-center">
+          <p role="status" className="text-sm text-muted-foreground">
+            Todavía no hay tests registrados.
+          </p>
+          {canEdit && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" aria-hidden="true" />
+              <span>Crear primer test</span>
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-border bg-card shadow-[var(--shadow-xs)]">
           <Table>
-            <TableHeader>
-              <TableRow><TableHead>Código</TableHead><TableHead>Test</TableHead><TableHead>Estado</TableHead><TableHead>Acciones</TableHead></TableRow>
+            <TableHeader className="border-b border-border bg-muted/70 text-xs font-semibold text-muted-foreground">
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-36 px-4 py-2.5">Código</TableHead>
+                <TableHead className="px-4 py-2.5">Test</TableHead>
+                <TableHead className="w-32 px-4 py-2.5">Estado</TableHead>
+                <TableHead className="w-40 px-4 py-2.5 text-right">Acciones</TableHead>
+              </TableRow>
             </TableHeader>
             <TableBody>
               {query.data.map((test) => (
-                <TableRow key={test.id}>
-                  <TableCell className="font-mono">{test.code}</TableCell>
-                  <TableCell className="font-medium">{test.name}</TableCell>
-                  <TableCell>{test.status}</TableCell>
-                  <TableCell>
+                <TableRow key={test.id} className="h-11">
+                  <TableCell className="px-4 py-2.5 font-mono text-xs font-semibold text-foreground">
+                    {test.code}
+                  </TableCell>
+                  <TableCell className="px-4 py-2.5">
+                    <div className="font-medium text-foreground">{test.name}</div>
+                    {test.description && (
+                      <p className="max-w-xl truncate text-xs text-muted-foreground">
+                        {test.description}
+                      </p>
+                    )}
+                  </TableCell>
+                  <TableCell className="px-4 py-2.5">
+                    <Badge variant="outline" className="font-mono text-xs">
+                      {test.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-4 py-2.5 text-right">
                     <Button variant="outline" size="sm" asChild>
-                      <Link to="/app/instrumentos/$versionId" params={{ versionId: String(test.id) }} aria-label={`Ver versiones de ${test.name}`}>
+                      <Link
+                        to="/app/instrumentos/$versionId"
+                        params={{ versionId: String(test.id) }}
+                        aria-label={`Ver versiones de ${test.name}`}
+                      >
                         Ver versiones
                       </Link>
                     </Button>
@@ -114,7 +124,13 @@ export function InstrumentList() {
           </Table>
         </div>
       )}
-      {createOpen && canEdit && <NewTestDialog onClose={() => setCreateOpen(false)} />}
+
+      {createOpen && canEdit && (
+        <NewTestWizardDialog
+          existingTests={query.data ?? []}
+          onClose={() => setCreateOpen(false)}
+        />
+      )}
     </section>
   );
 }

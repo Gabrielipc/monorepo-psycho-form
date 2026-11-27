@@ -66,8 +66,8 @@ export interface ItemEditorProps {
 }
 
 /**
- * Editor contextual de un ítem del builder: metadatos, estímulo visual,
- * lista de opciones (si aplica) y clave de respuesta.
+ * Editor contextual minimalista de un ítem del builder en un contenedor unificado:
+ * metadatos en columnas, estímulo visual, lista de opciones y clave de respuesta.
  */
 export function ItemEditor({
   subtest,
@@ -151,45 +151,9 @@ export function ItemEditor({
   const timeLimitError = itemProblems.find((p) => p.field === "timeLimitSeconds");
 
   return (
-    <div className="space-y-6" data-slot="item-editor">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
-        <div className="min-w-0">
-          <h2 className="truncate text-base font-semibold text-foreground">
-            {subtest.name} › {item.code}
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Ítem #{item.order} · Subtest {subtest.code}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={isLocked}
-            onClick={handleDuplicate}
-            className="gap-1.5"
-          >
-            <Copy className="size-3.5" aria-hidden="true" />
-            <span>Duplicar</span>
-          </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            disabled={isLocked}
-            onClick={() => setDeleteDialogOpen(true)}
-            className="gap-1.5"
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            <span>Eliminar ítem</span>
-          </Button>
-        </div>
-      </div>
-
+    <div className="space-y-3" data-slot="item-editor">
       {generalItemProblems.length > 0 && (
-        <div className="space-y-2" aria-label="Validación del ítem">
+        <div className="space-y-1.5" aria-label="Validación del ítem">
           {generalItemProblems.map((problem) => {
             const isError = problem.severity === "error";
             return (
@@ -220,261 +184,310 @@ export function ItemEditor({
         </div>
       )}
 
-      <section
-        aria-labelledby={`${editorId}-general-heading`}
-        className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-xs)]"
-      >
-        <h3 id={`${editorId}-general-heading`} className="text-sm font-semibold text-foreground">
-          Configuración del ítem
-        </h3>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label htmlFor={codeInputId} className="text-sm font-medium text-foreground">
-              Código del ítem <span className="text-status-danger-fg">*</span>
-            </Label>
-            <Input
-              id={codeInputId}
-              value={item.code}
-              disabled={isLocked}
-              aria-invalid={Boolean(codeError)}
-              className="font-mono"
-              onChange={(event) => updateItem({ code: event.target.value })}
-            />
-            {codeError && (
-              <p className="text-xs text-status-danger-fg">{codeError.message}</p>
-            )}
+      <div className="divide-y divide-border rounded-lg border border-border bg-card shadow-[var(--shadow-xs)]">
+        {/* Cabecera minimalista con botones de icono */}
+        <div className="flex items-center justify-between gap-2 px-5 py-3">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <h2 className="truncate text-sm font-semibold text-foreground">
+              {subtest.name} › {item.code}
+            </h2>
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              #{item.order}
+            </span>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor={itemTypeId} className="text-sm font-medium text-foreground">
-              Tipo de ítem
-            </Label>
-            <Select
-              value={item.itemType}
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Duplicar"
+              title="Duplicar ítem"
               disabled={isLocked}
-              onValueChange={(value) => updateItem({ itemType: value as ItemType })}
+              onClick={handleDuplicate}
+              className="size-8 text-muted-foreground hover:text-foreground"
             >
-              <SelectTrigger id={itemTypeId}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ITEM_TYPE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor={responseTypeId} className="text-sm font-medium text-foreground">
-              Tipo de respuesta
-            </Label>
-            <Select
-              value={item.responseType}
+              <Copy className="size-4" aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Eliminar ítem"
+              title="Eliminar ítem"
               disabled={isLocked}
-              onValueChange={(value) => updateItem({ responseType: value as ResponseType })}
+              onClick={() => setDeleteDialogOpen(true)}
+              className="size-8 text-muted-foreground hover:bg-status-danger-bg hover:text-status-danger-fg"
             >
-              <SelectTrigger id={responseTypeId}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {RESPONSE_TYPE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <Trash2 className="size-4" aria-hidden="true" />
+            </Button>
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor={promptId} className="text-sm font-medium text-foreground">
-            Enunciado
-          </Label>
-          <Textarea
-            id={promptId}
-            value={item.prompt}
-            disabled={isLocked}
-            rows={3}
-            placeholder="Pregunta o consigna principal del ítem"
-            onChange={(event) => updateItem({ prompt: event.target.value })}
-          />
-        </div>
+        {/* Configuración del ítem */}
+        <section aria-labelledby={`${editorId}-general-heading`} className="space-y-4 p-5">
+          <h3
+            id={`${editorId}-general-heading`}
+            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            Configuración del ítem
+          </h3>
 
-        <div className="space-y-1.5">
-          <Label htmlFor={instructionId} className="text-sm font-medium text-foreground">
-            Instrucción
-          </Label>
-          <Textarea
-            id={instructionId}
-            value={item.instruction}
-            disabled={isLocked}
-            rows={2}
-            placeholder="Indicaciones específicas para el participante"
-            onChange={(event) => updateItem({ instruction: event.target.value })}
-          />
-        </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-12">
+            <div className="space-y-1 xl:col-span-2">
+              <Label htmlFor={codeInputId} className="text-xs font-medium text-muted-foreground">
+                Código del ítem <span className="text-status-danger-fg">*</span>
+              </Label>
+              <Input
+                id={codeInputId}
+                value={item.code}
+                disabled={isLocked}
+                aria-invalid={Boolean(codeError)}
+                className="h-8 font-mono text-sm"
+                onChange={(event) => updateItem({ code: event.target.value })}
+              />
+              {codeError && (
+                <p className="text-xs text-status-danger-fg">{codeError.message}</p>
+              )}
+            </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor={baseScoreId} className="text-sm font-medium text-foreground">
-              Puntaje base
-            </Label>
-            <Input
-              id={baseScoreId}
-              type="number"
-              min={0}
-              step="any"
-              value={item.baseScore}
-              disabled={isLocked}
-              aria-invalid={Boolean(baseScoreError)}
-              className="tabular-nums"
-              onChange={(event) => {
-                const raw = event.target.value.trim();
-                if (raw === "") return;
-                const parsed = Number(raw);
-                if (Number.isFinite(parsed) && parsed >= 0) {
-                  updateItem({ baseScore: parsed });
-                }
-              }}
-            />
-            {baseScoreError && (
-              <p className="text-xs text-status-danger-fg">{baseScoreError.message}</p>
-            )}
+            <div className="space-y-1 xl:col-span-3">
+              <Label htmlFor={itemTypeId} className="text-xs font-medium text-muted-foreground">
+                Tipo de ítem
+              </Label>
+              <Select
+                value={item.itemType}
+                disabled={isLocked}
+                onValueChange={(value) => updateItem({ itemType: value as ItemType })}
+              >
+                <SelectTrigger id={itemTypeId} size="sm" className="text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ITEM_TYPE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1 xl:col-span-3">
+              <Label htmlFor={responseTypeId} className="text-xs font-medium text-muted-foreground">
+                Tipo de respuesta
+              </Label>
+              <Select
+                value={item.responseType}
+                disabled={isLocked}
+                onValueChange={(value) => updateItem({ responseType: value as ResponseType })}
+              >
+                <SelectTrigger id={responseTypeId} size="sm" className="text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {RESPONSE_TYPE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1 xl:col-span-2">
+              <Label htmlFor={baseScoreId} className="text-xs font-medium text-muted-foreground">
+                Puntaje base
+              </Label>
+              <Input
+                id={baseScoreId}
+                type="number"
+                min={0}
+                step="any"
+                value={item.baseScore}
+                disabled={isLocked}
+                aria-invalid={Boolean(baseScoreError)}
+                className="h-8 text-sm tabular-nums"
+                onChange={(event) => {
+                  const raw = event.target.value.trim();
+                  if (raw === "") return;
+                  const parsed = Number(raw);
+                  if (Number.isFinite(parsed) && parsed >= 0) {
+                    updateItem({ baseScore: parsed });
+                  }
+                }}
+              />
+              {baseScoreError && (
+                <p className="text-xs text-status-danger-fg">{baseScoreError.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-1 xl:col-span-2">
+              <Label htmlFor={timeLimitId} className="text-xs font-medium text-muted-foreground">
+                Tiempo límite (segundos)
+              </Label>
+              <Input
+                id={timeLimitId}
+                type="number"
+                min={1}
+                step={1}
+                value={item.timeLimitSeconds ?? ""}
+                disabled={isLocked}
+                placeholder="Sin límite"
+                aria-invalid={Boolean(timeLimitError)}
+                className="h-8 text-sm tabular-nums"
+                onChange={(event) => {
+                  const raw = event.target.value.trim();
+                  if (raw === "") {
+                    updateItem({ timeLimitSeconds: null });
+                    return;
+                  }
+                  const parsed = Number.parseInt(raw, 10);
+                  if (Number.isFinite(parsed) && parsed > 0) {
+                    updateItem({ timeLimitSeconds: parsed });
+                  }
+                }}
+              />
+              {timeLimitError && (
+                <p className="text-xs text-status-danger-fg">{timeLimitError.message}</p>
+              )}
+            </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor={timeLimitId} className="text-sm font-medium text-foreground">
-              Tiempo límite (segundos)
-            </Label>
-            <Input
-              id={timeLimitId}
-              type="number"
-              min={1}
-              step={1}
-              value={item.timeLimitSeconds ?? ""}
-              disabled={isLocked}
-              placeholder="Sin límite"
-              aria-invalid={Boolean(timeLimitError)}
-              className="tabular-nums"
-              onChange={(event) => {
-                const raw = event.target.value.trim();
-                if (raw === "") {
-                  updateItem({ timeLimitSeconds: null });
-                  return;
-                }
-                const parsed = Number.parseInt(raw, 10);
-                if (Number.isFinite(parsed) && parsed > 0) {
-                  updateItem({ timeLimitSeconds: parsed });
-                }
-              }}
-            />
-            {timeLimitError && (
-              <p className="text-xs text-status-danger-fg">{timeLimitError.message}</p>
-            )}
-          </div>
-        </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="space-y-1 md:col-span-7">
+              <Label htmlFor={promptId} className="text-xs font-medium text-muted-foreground">
+                Enunciado
+              </Label>
+              <Textarea
+                id={promptId}
+                value={item.prompt}
+                disabled={isLocked}
+                rows={2}
+                placeholder="Pregunta o consigna principal del ítem"
+                onChange={(event) => updateItem({ prompt: event.target.value })}
+              />
+            </div>
 
-        <div className="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">
-          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2.5">
-            <div className="space-y-0.5">
-              <Label htmlFor={requiredId} className="text-sm font-medium text-foreground">
+            <div className="space-y-1 md:col-span-5">
+              <Label htmlFor={instructionId} className="text-xs font-medium text-muted-foreground">
+                Instrucción
+              </Label>
+              <Textarea
+                id={instructionId}
+                value={item.instruction}
+                disabled={isLocked}
+                rows={2}
+                placeholder="Indicaciones específicas para el participante"
+                onChange={(event) => updateItem({ instruction: event.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-1">
+            <div className="flex items-center gap-2">
+              <Switch
+                id={requiredId}
+                checked={item.required}
+                disabled={isLocked}
+                onCheckedChange={(checked) => updateItem({ required: checked })}
+              />
+              <Label htmlFor={requiredId} className="cursor-pointer text-xs font-medium text-foreground">
                 Ítem obligatorio
               </Label>
-              <p className="text-xs text-muted-foreground">
-                El participante debe responder este ítem.
-              </p>
             </div>
-            <Switch
-              id={requiredId}
-              checked={item.required}
-              disabled={isLocked}
-              onCheckedChange={(checked) => updateItem({ required: checked })}
-            />
-          </div>
 
-          <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2.5">
-            <div className="space-y-0.5">
-              <Label htmlFor={confidentialId} className="text-sm font-medium text-foreground">
+            <div className="flex items-center gap-2">
+              <Switch
+                id={confidentialId}
+                checked={item.confidential}
+                disabled={isLocked}
+                onCheckedChange={(checked) => updateItem({ confidential: checked })}
+              />
+              <Label
+                htmlFor={confidentialId}
+                className="cursor-pointer text-xs font-medium text-foreground"
+              >
                 Confidencial
               </Label>
-              <p className="text-xs text-muted-foreground">
-                Protege el contenido fuera de sesión activa.
-              </p>
             </div>
-            <Switch
-              id={confidentialId}
-              checked={item.confidential}
-              disabled={isLocked}
-              onCheckedChange={(checked) => updateItem({ confidential: checked })}
-            />
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section
-        aria-labelledby={`${editorId}-images-heading`}
-        className="space-y-3 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-xs)]"
-      >
-        <div>
-          <h3 id={`${editorId}-images-heading`} className="text-sm font-semibold text-foreground">
+        {/* Imágenes de estímulo */}
+        <section aria-labelledby={`${editorId}-images-heading`} className="space-y-2.5 px-5 py-3.5">
+          <h3
+            id={`${editorId}-images-heading`}
+            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+          >
             Imágenes de estímulo
           </h3>
-          <p className="text-xs text-muted-foreground">
-            Adjunta láminas o figuras asociadas al enunciado del ítem (máximo 5 MB por archivo).
-          </p>
-        </div>
 
-        <ImageField
-          kind="item"
-          images={item.images}
-          readOnly={readOnly}
-          canEdit={canEdit}
-          onAttachFile={(file) => {
-            const pending = onRegisterPendingFile(file);
-            onDispatch({
-              type: "ATTACH_ITEM_IMAGE",
-              subtestDraftId: subtest.draftId,
-              itemDraftId: item.draftId,
-              image: {
-                pendingFileId: pending.pendingFileId,
-                previewUrl: pending.previewUrl,
-                fileName: pending.fileName,
-                altText: "",
-              },
-            });
-          }}
-          onUpdateImage={(imageDraftId, patch) =>
-            onDispatch({
-              type: "UPDATE_ITEM_IMAGE",
-              subtestDraftId: subtest.draftId,
-              itemDraftId: item.draftId,
-              imageDraftId,
-              patch,
-            })
-          }
-          onDeleteImage={(imageDraftId) => {
-            const target = item.images.find((img) => img.draftId === imageDraftId);
-            if (target?.pendingFileId !== null && target?.pendingFileId !== undefined) {
-              onRemovePendingFile(target.pendingFileId);
+          <ImageField
+            kind="item"
+            images={item.images}
+            readOnly={readOnly}
+            canEdit={canEdit}
+            onAttachFile={(file) => {
+              const pending = onRegisterPendingFile(file);
+              onDispatch({
+                type: "ATTACH_ITEM_IMAGE",
+                subtestDraftId: subtest.draftId,
+                itemDraftId: item.draftId,
+                image: {
+                  pendingFileId: pending.pendingFileId,
+                  previewUrl: pending.previewUrl,
+                  fileName: pending.fileName,
+                  altText: "",
+                },
+              });
+            }}
+            onUpdateImage={(imageDraftId, patch) =>
+              onDispatch({
+                type: "UPDATE_ITEM_IMAGE",
+                subtestDraftId: subtest.draftId,
+                itemDraftId: item.draftId,
+                imageDraftId,
+                patch,
+              })
             }
-            onDispatch({
-              type: "DELETE_ITEM_IMAGE",
-              subtestDraftId: subtest.draftId,
-              itemDraftId: item.draftId,
-              imageDraftId,
-            });
-          }}
-        />
-      </section>
+            onDeleteImage={(imageDraftId) => {
+              const target = item.images.find((img) => img.draftId === imageDraftId);
+              if (target?.pendingFileId !== null && target?.pendingFileId !== undefined) {
+                onRemovePendingFile(target.pendingFileId);
+              }
+              onDispatch({
+                type: "DELETE_ITEM_IMAGE",
+                subtestDraftId: subtest.draftId,
+                itemDraftId: item.draftId,
+                imageDraftId,
+              });
+            }}
+          />
+        </section>
 
-      {OPTION_RESPONSE_TYPES.has(item.responseType) && (
-        <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-xs)]">
-          <OptionList
+        {/* Opciones de respuesta */}
+        {OPTION_RESPONSE_TYPES.has(item.responseType) && (
+          <div className="px-5 py-4">
+            <OptionList
+              subtestDraftId={subtest.draftId}
+              subtestDefaultRuleId={subtest.defaultRuleId}
+              item={item}
+              readOnly={readOnly}
+              canEdit={canEdit}
+              canConfigureScoring={canConfigureScoring}
+              problems={itemProblems}
+              onDispatch={onDispatch}
+              onRegisterPendingFile={onRegisterPendingFile}
+              onRemovePendingFile={onRemovePendingFile}
+            />
+          </div>
+        )}
+
+        {/* Clave de respuesta */}
+        <div className="px-5 py-4">
+          <AnswerKeyField
+            embedded
             subtestDraftId={subtest.draftId}
             subtestDefaultRuleId={subtest.defaultRuleId}
             item={item}
@@ -483,22 +496,9 @@ export function ItemEditor({
             canConfigureScoring={canConfigureScoring}
             problems={itemProblems}
             onDispatch={onDispatch}
-            onRegisterPendingFile={onRegisterPendingFile}
-            onRemovePendingFile={onRemovePendingFile}
           />
         </div>
-      )}
-
-      <AnswerKeyField
-        subtestDraftId={subtest.draftId}
-        subtestDefaultRuleId={subtest.defaultRuleId}
-        item={item}
-        readOnly={readOnly}
-        canEdit={canEdit}
-        canConfigureScoring={canConfigureScoring}
-        problems={itemProblems}
-        onDispatch={onDispatch}
-      />
+      </div>
 
       <ConfirmDialog
         open={deleteDialogOpen}

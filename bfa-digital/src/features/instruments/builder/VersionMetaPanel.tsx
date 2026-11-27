@@ -6,7 +6,6 @@ import { Alert, AlertDescription, AlertTitle } from "../../../app/components/ui/
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "../../../app/components/ui/card";
@@ -127,26 +126,21 @@ export function VersionMetaPanel({
   const badgeStatus = version.status === "DESCONOCIDO" ? "BORRADOR" : version.status;
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-3">
       <Card className="border-border bg-card shadow-[var(--shadow-xs)]">
-        <CardHeader className="border-b border-border pb-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <span className="font-mono text-xs font-medium text-muted-foreground">
-                {version.testCode}
-              </span>
-              <CardTitle className="text-base font-semibold text-foreground">
-                {version.testName}
-              </CardTitle>
-              <CardDescription className="text-xs text-muted-foreground">
-                Configuración general y parámetros de aplicación de la versión.
-              </CardDescription>
-            </div>
-            <StatusBadge domain="version" status={badgeStatus} />
+        <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-border px-5 py-3">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <CardTitle className="truncate text-sm font-semibold text-foreground">
+              {version.testName}
+            </CardTitle>
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {version.testCode}
+            </span>
           </div>
+          <StatusBadge domain="version" status={badgeStatus} />
         </CardHeader>
 
-        <CardContent className="flex flex-col gap-6 pt-6">
+        <CardContent className="flex flex-col gap-4 p-5">
           {(readOnly || !canEdit) && (
             <Alert className="border-status-info-border bg-status-info-bg text-status-info-fg">
               <Info className="size-4" aria-hidden="true" />
@@ -160,14 +154,15 @@ export function VersionMetaPanel({
           )}
 
           {problemsByField.other.length > 0 && (
-            <div className="rounded-lg border border-status-danger-border bg-status-danger-bg/60 p-3">
+            <div className="rounded-md border border-status-danger-border bg-status-danger-bg/60 p-2.5">
               <FieldMessages problems={problemsByField.other} />
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={numberId}>
+          {/* Fila compacta: Número de versión + Tiempo límite + Estrategia */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
+            <div className="flex flex-col gap-1 md:col-span-3">
+              <Label htmlFor={numberId} className="text-xs font-medium text-muted-foreground">
                 <span>Número de versión</span>
                 <span className="text-status-danger-fg" aria-hidden="true">
                   *
@@ -180,6 +175,7 @@ export function VersionMetaPanel({
                 disabled={!isEditable}
                 aria-invalid={hasError("number")}
                 placeholder="Ej. 1.0"
+                className="h-8 font-mono text-sm"
                 onChange={(event) =>
                   onDispatch({
                     type: "UPDATE_VERSION_META",
@@ -190,8 +186,10 @@ export function VersionMetaPanel({
               <FieldMessages problems={problemsByField.number} />
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={timeLimitId}>Tiempo límite global (segundos)</Label>
+            <div className="flex flex-col gap-1 md:col-span-4">
+              <Label htmlFor={timeLimitId} className="text-xs font-medium text-muted-foreground">
+                Tiempo límite global (segundos)
+              </Label>
               <Input
                 id={timeLimitId}
                 type="number"
@@ -199,6 +197,7 @@ export function VersionMetaPanel({
                 disabled={!isEditable}
                 aria-invalid={hasError("timeLimitSeconds")}
                 placeholder="Sin límite global"
+                className="h-8 text-sm tabular-nums"
                 onChange={(event) => {
                   const raw = event.target.value.trim();
                   if (raw === "") {
@@ -215,76 +214,33 @@ export function VersionMetaPanel({
                   });
                 }}
               />
-              <p className="text-xs text-muted-foreground">
-                Déjalo vacío si el tiempo se controla por subtest.
-              </p>
               <FieldMessages problems={problemsByField.timeLimitSeconds} />
             </div>
-          </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={instructionsId}>Instrucciones generales</Label>
-            <Textarea
-              id={instructionsId}
-              rows={4}
-              value={version.instructions}
-              disabled={!isEditable}
-              aria-invalid={hasError("instructions")}
-              placeholder="Indicaciones previas mostradas al participante antes de iniciar..."
-              onChange={(event) =>
-                onDispatch({
-                  type: "UPDATE_VERSION_META",
-                  patch: { instructions: event.target.value },
-                })
-              }
-            />
-            <FieldMessages problems={problemsByField.instructions} />
-          </div>
+            {/* Estrategia de calificación */}
+            <div className="flex flex-col gap-1 md:col-span-5">
+              <Label htmlFor={strategySelectId} className="text-xs font-medium text-muted-foreground">
+                <span>Estrategia de calificación</span>
+                <span className="text-status-danger-fg" aria-hidden="true">
+                  *
+                </span>
+              </Label>
 
-          {/* Estrategia de calificación */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor={strategySelectId}>
-              <span>Estrategia de calificación</span>
-              <span className="text-status-danger-fg" aria-hidden="true">
-                *
-              </span>
-            </Label>
-
-            {!canConfigureScoring ? (
-              <div className="flex flex-col gap-2">
-                <div
-                  aria-readonly="true"
-                  data-testid="version-strategy-readonly"
-                  className="flex h-9 items-center justify-between rounded-md border border-border bg-muted px-3 text-sm text-foreground"
-                >
-                  <span className="truncate">{readOnlyStrategyLabel}</span>
-                  <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              {!canConfigureScoring ? (
+                <div className="flex flex-col gap-1">
+                  <div
+                    aria-readonly="true"
+                    data-testid="version-strategy-readonly"
+                    className="flex h-8 items-center justify-between rounded-md border border-border bg-muted px-2.5 text-xs text-foreground"
+                  >
+                    <span className="truncate">{readOnlyStrategyLabel}</span>
+                    <Lock className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  </div>
+                  <p className="text-xs text-status-warning-fg">
+                    Requiere <span className="font-mono">CALIFICACION_CONFIGURAR</span> para modificarla.
+                  </p>
                 </div>
-                <Alert className="border-status-warning-border bg-status-warning-bg text-status-warning-fg">
-                  <Lock className="size-4" aria-hidden="true" />
-                  <AlertTitle className="text-sm font-medium">
-                    Configuración de calificación restringida
-                  </AlertTitle>
-                  <AlertDescription className="text-xs text-status-warning-fg">
-                    Se requiere el permiso <span className="font-mono">CALIFICACION_CONFIGURAR</span>{" "}
-                    para consultar o modificar la estrategia de calificación.
-                  </AlertDescription>
-                </Alert>
-              </div>
-            ) : (
-              <>
-                {strategiesError && (
-                  <Alert className="border-status-danger-border bg-status-danger-bg text-status-danger-fg">
-                    <AlertCircle className="size-4" aria-hidden="true" />
-                    <AlertTitle className="text-sm font-medium">
-                      Error al cargar estrategias
-                    </AlertTitle>
-                    <AlertDescription className="text-xs text-status-danger-fg">
-                      {strategiesError}
-                    </AlertDescription>
-                  </Alert>
-                )}
-
+              ) : (
                 <select
                   id={strategySelectId}
                   value={version.strategyId === null ? "" : String(version.strategyId)}
@@ -298,7 +254,7 @@ export function VersionMetaPanel({
                     });
                   }}
                   className={cn(
-                    "border-input bg-input-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+                    "border-input bg-input-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex h-8 w-full rounded-md border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
                     "aria-invalid:border-destructive aria-invalid:ring-destructive/20",
                   )}
                 >
@@ -318,23 +274,48 @@ export function VersionMetaPanel({
                     </option>
                   ))}
                 </select>
-              </>
-            )}
+              )}
 
-            <FieldMessages problems={problemsByField.strategyId} />
+              <FieldMessages problems={problemsByField.strategyId} />
+            </div>
           </div>
 
-          {/* Aleatorización */}
-          <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/30 p-4">
-            <h3 className="text-sm font-semibold text-foreground">Orden y aleatorización</h3>
+          {canConfigureScoring && strategiesError && (
+            <Alert className="border-status-danger-border bg-status-danger-bg text-status-danger-fg">
+              <AlertCircle className="size-4" aria-hidden="true" />
+              <AlertTitle className="text-sm font-medium">
+                Error al cargar estrategias
+              </AlertTitle>
+              <AlertDescription className="text-xs text-status-danger-fg">
+                {strategiesError}
+              </AlertDescription>
+            </Alert>
+          )}
 
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor={randomizeSubtestsId}>Aleatorizar orden de subtests</Label>
-                <p className="text-xs text-muted-foreground">
-                  Presenta los subtests en orden distinto por participante.
-                </p>
-              </div>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={instructionsId} className="text-xs font-medium text-muted-foreground">
+              Instrucciones generales
+            </Label>
+            <Textarea
+              id={instructionsId}
+              rows={3}
+              value={version.instructions}
+              disabled={!isEditable}
+              aria-invalid={hasError("instructions")}
+              placeholder="Indicaciones previas mostradas al participante antes de iniciar..."
+              onChange={(event) =>
+                onDispatch({
+                  type: "UPDATE_VERSION_META",
+                  patch: { instructions: event.target.value },
+                })
+              }
+            />
+            <FieldMessages problems={problemsByField.instructions} />
+          </div>
+
+          {/* Toggles minimalistas en línea */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3">
+            <div className="flex items-center gap-2">
               <Switch
                 id={randomizeSubtestsId}
                 checked={version.randomizeSubtests}
@@ -346,17 +327,15 @@ export function VersionMetaPanel({
                   })
                 }
               />
+              <Label
+                htmlFor={randomizeSubtestsId}
+                className="cursor-pointer text-xs font-medium text-foreground"
+              >
+                Aleatorizar orden de subtests
+              </Label>
             </div>
 
-            <div className="border-t border-border" />
-
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor={randomizeItemsId}>Permitir aleatorización de ítems</Label>
-                <p className="text-xs text-muted-foreground">
-                  Desactivarlo también desactiva la aleatorización de ítems en todos los subtests.
-                </p>
-              </div>
+            <div className="flex items-center gap-2">
               <Switch
                 id={randomizeItemsId}
                 checked={version.randomizeItems}
@@ -368,6 +347,12 @@ export function VersionMetaPanel({
                   })
                 }
               />
+              <Label
+                htmlFor={randomizeItemsId}
+                className="cursor-pointer text-xs font-medium text-foreground"
+              >
+                Permitir aleatorización de ítems
+              </Label>
             </div>
           </div>
         </CardContent>

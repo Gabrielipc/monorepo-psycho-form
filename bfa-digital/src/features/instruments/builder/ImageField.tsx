@@ -85,37 +85,66 @@ export function ImageField({
     onAttachFile(file);
   };
 
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      id={`${fieldId}-file-input`}
+      type="file"
+      accept={ACCEPTED_IMAGE_MIME_TYPES}
+      aria-label="Seleccionar archivo de imagen"
+      className="sr-only"
+      disabled={attachDisabled}
+      onChange={handleFileChange}
+    />
+  );
+
+  const attachButton = (
+    <Button
+      type="button"
+      variant={compact ? "ghost" : "outline"}
+      size="icon"
+      aria-label="Adjuntar imagen"
+      title="Adjuntar imagen"
+      disabled={attachDisabled}
+      onClick={() => fileInputRef.current?.click()}
+      className={cn(
+        compact
+          ? "size-7 text-muted-foreground hover:text-foreground"
+          : "size-8 text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <ImagePlus className="size-4" aria-hidden="true" />
+    </Button>
+  );
+
+  if (compact && activeImages.length === 0 && !fileError) {
+    return (
+      <div className="inline-flex items-center" data-slot="image-field" data-kind={kind}>
+        {fileInput}
+        {attachButton}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-3" data-slot="image-field" data-kind={kind}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs font-medium text-muted-foreground">
+    <div
+      className={cn(
+        "space-y-2.5",
+        compact && "order-last mt-1 w-full basis-full border-t border-border pt-2",
+      )}
+      data-slot="image-field"
+      data-kind={kind}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted-foreground">
           {activeImages.length === 0
             ? "Sin imágenes adjuntas"
             : `${activeImages.length} ${activeImages.length === 1 ? "imagen adjunta" : "imágenes adjuntas"}`}
         </span>
 
         <div>
-          <input
-            ref={fileInputRef}
-            id={`${fieldId}-file-input`}
-            type="file"
-            accept={ACCEPTED_IMAGE_MIME_TYPES}
-            aria-label="Seleccionar archivo de imagen"
-            className="sr-only"
-            disabled={attachDisabled}
-            onChange={handleFileChange}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={attachDisabled}
-            onClick={() => fileInputRef.current?.click()}
-            className="gap-1.5"
-          >
-            <ImagePlus className="size-4" aria-hidden="true" />
-            <span>Adjuntar imagen</span>
-          </Button>
+          {fileInput}
+          {attachButton}
         </div>
       </div>
 
@@ -130,7 +159,7 @@ export function ImageField({
       )}
 
       {activeImages.length > 0 && (
-        <div className={cn("grid gap-3", compact ? "grid-cols-1" : "grid-cols-1 md:grid-cols-2")}>
+        <div className={cn("grid gap-2.5", compact ? "grid-cols-1" : "grid-cols-1 md:grid-cols-2")}>
           {activeImages.map((img, index) => {
             const altInputId = `${fieldId}-alt-${img.draftId}`;
             const roleSelectId = `${fieldId}-role-${img.draftId}`;
@@ -144,25 +173,26 @@ export function ImageField({
                 key={img.draftId}
                 data-slot="image-field-item"
                 className={cn(
-                  "flex flex-col gap-3 rounded-lg border border-border bg-card shadow-[var(--shadow-xs)]",
-                  compact ? "p-3" : "p-4",
+                  "flex flex-col gap-2.5 rounded-md border border-border bg-muted/20",
+                  compact ? "p-2.5" : "p-3",
                 )}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-xs font-medium text-muted-foreground">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-xs font-medium text-muted-foreground">
                     Imagen {index + 1}
                     {img.fileName ? ` · ${img.fileName}` : ""}
                   </span>
                   <Button
                     type="button"
                     variant="ghost"
-                    size="sm"
+                    size="icon"
+                    aria-label="Eliminar imagen"
+                    title="Eliminar imagen"
                     disabled={isLocked}
                     onClick={() => onDeleteImage(img.draftId)}
-                    className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-status-danger-bg hover:text-status-danger-fg"
+                    className="size-7 shrink-0 text-muted-foreground hover:bg-status-danger-bg hover:text-status-danger-fg"
                   >
                     <Trash2 className="size-3.5" aria-hidden="true" />
-                    <span>Eliminar imagen</span>
                   </Button>
                 </div>
 
@@ -185,20 +215,26 @@ export function ImageField({
                     previewUrl={img.previewUrl}
                     alt={img.altText || img.fileName || "Imagen"}
                     compact={compact}
-                    className={compact ? "max-h-24" : "max-h-56"}
+                    className={compact ? "max-h-24" : "max-h-48"}
                   />
                 </div>
 
-                <div className="space-y-2.5">
+                <div
+                  className={cn(
+                    "grid gap-2",
+                    kind === "item" ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1",
+                  )}
+                >
                   <div className="space-y-1">
-                    <Label htmlFor={altInputId} className="text-xs font-medium text-foreground">
+                    <Label htmlFor={altInputId} className="text-xs font-medium text-muted-foreground">
                       Texto alternativo (alt)
                     </Label>
                     <Input
                       id={altInputId}
                       value={img.altText}
                       disabled={isLocked}
-                      placeholder="Describe brevemente la imagen para lectores de pantalla"
+                      placeholder="Describe brevemente la imagen..."
+                      className="h-8 text-xs"
                       onChange={(event) =>
                         onUpdateImage(img.draftId, { altText: event.target.value })
                       }
@@ -212,7 +248,10 @@ export function ImageField({
 
                   {kind === "item" && (
                     <div className="space-y-1">
-                      <Label htmlFor={roleSelectId} className="text-xs font-medium text-foreground">
+                      <Label
+                        htmlFor={roleSelectId}
+                        className="text-xs font-medium text-muted-foreground"
+                      >
                         Rol de la imagen
                       </Label>
                       <Select
@@ -220,7 +259,7 @@ export function ImageField({
                         disabled={isLocked}
                         onValueChange={(value) => onUpdateImage(img.draftId, { role: value })}
                       >
-                        <SelectTrigger id={roleSelectId}>
+                        <SelectTrigger id={roleSelectId} size="sm" className="text-xs">
                           <SelectValue placeholder="Selecciona un rol" />
                         </SelectTrigger>
                         <SelectContent>

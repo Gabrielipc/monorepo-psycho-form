@@ -1,16 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  Plus,
+  Redo2,
+  Save,
+  Undo2,
+} from "lucide-react";
 import { ApiError } from "../../../api/errors";
 import { Alert, AlertDescription, AlertTitle } from "../../../app/components/ui/alert";
 import { Button } from "../../../app/components/ui/button";
 import { ConfirmDialog } from "../../../app/components/ui/confirm-dialog";
+import { StatusBadge } from "../../../app/components/ui/status-badge";
 import { captureAccountScope } from "../../../store/accountScope";
 import { BaremoEditor } from "../baremos/BaremoEditor";
 import { useBuilderStore } from "../builderStore";
 import {
   collectPendingImageUploads,
+  createDefaultDraftId,
   detectOrderCollisions,
+  isActiveDraftNode,
   isDocumentDirty,
   validateVersionDocument,
   type DocumentConflictNode,
@@ -34,7 +46,15 @@ import { ReuseSubtestDialog } from "./ReuseSubtestDialog";
 import { SubtestPanel } from "./SubtestPanel";
 import { VersionMetaPanel } from "./VersionMetaPanel";
 
-export function BuilderLayout({ testId, versionId }: { testId: number; versionId: number }) {
+export function BuilderLayout({
+  testId,
+  versionId,
+  initialFocus,
+}: {
+  testId: number;
+  versionId: number;
+  initialFocus?: "subtest";
+}) {
   const loaded = useQuery(versionDocumentQuery(versionId, { testId }));
   const strategies = useScoringStrategies();
   const permissions = useInstrumentPermissions();
@@ -71,6 +91,17 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
     if (!initialized.current) {
       initialized.current = true;
       state.initDocument(serverDoc);
+      if (initialFocus === "subtest") {
+        const firstActiveSubtest = [...serverDoc.subtests]
+          .filter(isActiveDraftNode)
+          .sort((a, b) => a.order - b.order)[0];
+        if (firstActiveSubtest) {
+          useBuilderStore.getState().selectNode({
+            kind: "subtest",
+            subtestDraftId: firstActiveSubtest.draftId,
+          });
+        }
+      }
     } else if (
       state.document &&
       ((!isDocumentDirty(state.document) && !state.reconciliationPending) ||
@@ -78,7 +109,7 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
     ) {
       state.commitSaved(serverDoc);
     }
-  }, [loaded.data]);
+  }, [loaded.data, initialFocus]);
 
   const hasUnpersistedFiles = doc !== null && collectPendingImageUploads(doc)
     .some(({ pendingFileId }) => pendingFileId in store.pendingFiles);
@@ -302,28 +333,92 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
   const scoring = { strategies: strategies.data ?? [], strategiesLoading: strategies.isLoading,
     strategiesError: strategies.error?.message };
   const copyOptions = { canEdit: permissions.canEdit, canConfigureScoring: permissions.canConfigureScoring };
+  const activeSubtests = [...doc.subtests].filter(isActiveDraftNode).sort((a, b) => a.order - b.order);
+  const activeSubtestItems = subtest
+    ? [...subtest.items].filter(isActiveDraftNode).sort((a, b) => a.order - b.order)
+    : [];
+  const currentItemIndex = item
+    ? activeSubtestItems.findIndex((entry) => entry.draftId === item.draftId)
+    : -1;
+  const prevItem = currentItemIndex > 0 ? activeSubtestItems[currentItemIndex - 1] : undefined;
+  const nextItem =
+    currentItemIndex >= 0 && currentItemIndex < activeSubtestItems.length - 1
+      ? activeSubtestItems[currentItemIndex + 1]
+      : undefined;
+  const isEditableContent = !readOnly && permissions.canEdit;
+  const badgeStatus = versionStatus === "DESCONOCIDO" ? "BORRADOR" : versionStatus;
+
+  function handleQuickAddSubtest() {
+    if (!isEditableContent) return;
+    const draftId = createDefaultDraftId("sub");
+    dispatch({ type: "ADD_SUBTEST", input: { draftId } });
+    store.selectNode({ kind: "subtest", subtestDraftId: draftId });
+  }
+
+  function handleQuickAddItem(targetSubtestDraftId: string) {
+    if (!isEditableContent) return;
+    const itemDraftId = createDefaultDraftId("item");
+    dispatch({ type: "ADD_ITEM", subtestDraftId: targetSubtestDraftId, input: { draftId: itemDraftId } });
+    store.selectNode({ kind: "item", subtestDraftId: targetSubtestDraftId, itemDraftId });
+  }
 
   return (
-    <section aria-label="Editor de versión" className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold">Versión {doc.version.number}</h2>
-          <p role="status" className="text-sm text-muted-foreground">
-            {versionStatus}{dirty ? " · Cambios pendientes" : ""}
+    <section aria-label="Editor de versión" className="space-y-3">
+      {/* Barra superior minimalista: estado + botones de icono + guardar */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold text-foreground">Versión {doc.version.number}</h2>
+          <StatusBadge domain="version" status={badgeStatus} />
+          <p role="status" className="text-xs text-muted-foreground">
+            {versionStatus}
+            {dirty ? " · Cambios pendientes" : ""}
             {dirty && store.autosaveSavedAt && " · Borrador guardado en este navegador"}
             {isReconciliationPending && " · Reconciliación pendiente"}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-1.5">
           {canEditDraft && (
             <>
-              <Button variant="outline" disabled={!store.past.length} onClick={store.undo}>Deshacer</Button>
-              <Button variant="outline" disabled={!store.future.length} onClick={store.redo}>Rehacer</Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="Deshacer"
+                title="Deshacer"
+                disabled={!store.past.length}
+                onClick={store.undo}
+              >
+                <Undo2 className="size-4" aria-hidden="true" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="Rehacer"
+                title="Rehacer"
+                disabled={!store.future.length}
+                onClick={store.redo}
+              >
+                <Redo2 className="size-4" aria-hidden="true" />
+              </Button>
             </>
           )}
-          <Button variant="outline" disabled={pending} onClick={() => setPreviewOpen(true)}>Vista previa</Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            aria-label="Vista previa"
+            title="Vista previa como participante"
+            disabled={pending}
+            onClick={() => setPreviewOpen(true)}
+          >
+            <Eye className="size-4" aria-hidden="true" />
+          </Button>
           {(canEditDraft || saveMutation.isPending) && (
-            <Button disabled={!canSave} onClick={() => void save()}>{saveMutation.isPending ? "Guardando…" : "Guardar borrador"}</Button>
+            <Button size="sm" className="h-8 gap-1.5" disabled={!canSave} onClick={() => void save()}>
+              <Save className="size-3.5" aria-hidden="true" />
+              <span>{saveMutation.isPending ? "Guardando…" : "Guardar borrador"}</span>
+            </Button>
           )}
         </div>
       </div>
@@ -477,14 +572,159 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
         </Alert>
       )}
       {error && !transition && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      <div className="grid items-start gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+      <div className="grid items-start gap-4 lg:grid-cols-[16.5rem_minmax(0,1fr)]">
         <OutlineTree
           {...common}
           selectedNode={selected}
           onSelectNode={store.selectNode}
           onOpenReuseSubtest={() => setReuseOpen(true)}
         />
-        <div className="min-w-0 space-y-4">
+        <div className="min-w-0 space-y-3">
+          {/* Breadcrumb minimalista con acciones de icono */}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs">
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => store.selectNode({ kind: "version" })}
+                className={
+                  selected.kind === "version"
+                    ? "font-medium text-foreground"
+                    : "hover:text-foreground hover:underline"
+                }
+              >
+                Versión {doc.version.number}
+              </button>
+
+              {subtest && (
+                <>
+                  <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      store.selectNode({ kind: "subtest", subtestDraftId: subtest.draftId })
+                    }
+                    className={
+                      selected.kind === "subtest"
+                        ? "truncate font-medium text-foreground"
+                        : "truncate hover:text-foreground hover:underline"
+                    }
+                  >
+                    {subtest.order}. {subtest.name || subtest.code}
+                  </button>
+                </>
+              )}
+
+              {item && subtest && (
+                <>
+                  <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="font-mono font-semibold text-foreground">{item.code}</span>
+                  <span className="tabular-nums text-muted-foreground">
+                    {currentItemIndex + 1}/{activeSubtestItems.length}
+                  </span>
+                </>
+              )}
+
+              {selected.kind === "baremos" && (
+                <>
+                  <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="font-medium text-foreground">Baremos</span>
+                </>
+              )}
+
+              {selected.kind === "publish" && (
+                <>
+                  <ChevronRight className="size-3.5 shrink-0" aria-hidden="true" />
+                  <span className="font-medium text-foreground">Revisión y publicación</span>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1">
+              {selected.kind === "version" && isEditableContent && activeSubtests.length === 0 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={handleQuickAddSubtest}
+                >
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  <span>Primer subtest</span>
+                </Button>
+              )}
+
+              {selected.kind === "subtest" && subtest && isEditableContent && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  aria-label="Añadir ítem rápido"
+                  title="Añadir ítem rápido"
+                  onClick={() => handleQuickAddItem(subtest.draftId)}
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                </Button>
+              )}
+
+              {selected.kind === "item" && subtest && item && (
+                <>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    aria-label="Ítem anterior"
+                    title="Ítem anterior"
+                    disabled={!prevItem}
+                    onClick={() =>
+                      prevItem &&
+                      store.selectNode({
+                        kind: "item",
+                        subtestDraftId: subtest.draftId,
+                        itemDraftId: prevItem.draftId,
+                      })
+                    }
+                  >
+                    <ChevronLeft className="size-4" aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    aria-label="Ítem siguiente"
+                    title="Ítem siguiente"
+                    disabled={!nextItem}
+                    onClick={() =>
+                      nextItem &&
+                      store.selectNode({
+                        kind: "item",
+                        subtestDraftId: subtest.draftId,
+                        itemDraftId: nextItem.draftId,
+                      })
+                    }
+                  >
+                    <ChevronRight className="size-4" aria-hidden="true" />
+                  </Button>
+                  {isEditableContent && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      aria-label="Añadir ítem rápido"
+                      title="Añadir ítem"
+                      onClick={() => handleQuickAddItem(subtest.draftId)}
+                    >
+                      <Plus className="size-4" aria-hidden="true" />
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+
           {selected.kind === "version" && <VersionMetaPanel {...common} {...scoring} />}
           {selected.kind === "subtest" && subtest && (
             <SubtestPanel
@@ -516,15 +756,37 @@ export function BuilderLayout({ testId, versionId }: { testId: number; versionId
               onSelectBaremo={(baremoDraftId) => store.selectNode({ kind: "baremos", baremoDraftId })}
             />
           )}
-          {selected.kind === "publish" && canTransition && (
-            <Button
-              disabled={pending || !(action === "approve" ? validation.canApprove : validation.canPublish)}
-              onClick={() => { setError(undefined); setTransition(action); }}
-            >
-              {action === "approve" ? "Aprobar versión" : "Publicar versión"}
-            </Button>
+          {selected.kind === "publish" && (
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-xs)]">
+              <div className="space-y-0.5">
+                <h3 className="text-sm font-semibold text-foreground">
+                  Publicación · Versión {doc.version.number}
+                </h3>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {activeSubtests.length} subtest(s) ·{" "}
+                  {activeSubtests.reduce(
+                    (acc, entry) => acc + entry.items.filter(isActiveDraftNode).length,
+                    0,
+                  )}{" "}
+                  ítem(s) · {doc.baremos.filter(isActiveDraftNode).length} baremo(s)
+                </p>
+              </div>
+              {canTransition && (
+                <Button
+                  size="sm"
+                  disabled={pending || !(action === "approve" ? validation.canApprove : validation.canPublish)}
+                  onClick={() => { setError(undefined); setTransition(action); }}
+                >
+                  {action === "approve" ? "Aprobar versión" : "Publicar versión"}
+                </Button>
+              )}
+            </div>
           )}
-          <ProblemsPanel report={validation} onSelect={store.selectNode} />
+          <ProblemsPanel
+            report={validation}
+            defaultOpen={selected.kind === "publish"}
+            onSelect={store.selectNode}
+          />
         </div>
       </div>
       {previewOpen && <PreviewRunner document={doc} onClose={() => setPreviewOpen(false)} />}
