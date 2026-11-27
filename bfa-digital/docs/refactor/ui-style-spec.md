@@ -1,4 +1,6 @@
-# BFA Digital — Especificación de Estilo UI/UX (Producción)
+# UAM SIAT — Especificación de Estilo UI/UX (Producción)
+
+> **Actualización de marca (2026-11):** la paleta pasó del azul `#0F2649` al teal de la identidad UAM Virtual (`--brand #0099a8`, `--primary #007c87`, `--brand-deep #036a70`), con Poppins para títulos. La fuente de verdad es `src/styles/theme.css`; los valores de color citados abajo son históricos.
 
 Sistema institucional de evaluación psicométrica (Universidad Americana — Psicología).
 Stack existente: **React 18, Vite, Tailwind 4, shadcn/Radix (`src/app/components/ui`), `lucide-react`, `sonner`, `motion`, `react-resizable-panels`**. No se introducen librerías nuevas.
