@@ -4,6 +4,7 @@ import com.uam.psychoform.assessment.dto.SessionSubtestDetailDto;
 import com.uam.psychoform.assessment.model.*;
 import com.uam.psychoform.assessment.repository.*;
 import com.uam.psychoform.dto.EntityView;
+import com.uam.psychoform.dto.QueryFilterSupport;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
 import com.uam.psychoform.instrument.model.Subtest;
 import com.uam.psychoform.instrument.model.VersionTest;
@@ -14,8 +15,13 @@ import com.uam.psychoform.security.model.Usuario;
 import com.uam.psychoform.security.repository.UsuarioRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.criteria.Fetch;
+import jakarta.persistence.criteria.Join;
+import jakarta.persistence.criteria.JoinType;
+import jakarta.persistence.criteria.Predicate;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -23,6 +29,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +39,19 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class SessionManagementService {
+    private static final String DEFAULT_SORT = "inicioProgramado,desc";
+    private static final Map<String, String> SORT_FIELDS = Map.of(
+            "inicioProgramado", "inicioProgramado",
+            "finProgramado", "finProgramado",
+            "inicioReal", "inicioReal",
+            "finReal", "finReal",
+            "codigoSesion", "codigoSesion",
+            "nombreSesion", "nombreSesion",
+            "estado", "estado",
+            "creadoEn", "creadoEn",
+            "id", "id");
+    private static final Set<String> NULLABLE_SORT_FIELDS = Set.of("finProgramado", "inicioReal", "finReal");
+
     private final SesionAplicacionRepository sesiones;
     private final SesionSubtestRepository sesionSubtests;
     private final VersionTestRepository versiones;
@@ -52,7 +74,78 @@ public class SessionManagementService {
 
     @PreAuthorize(SecurityPermissions.SESION_LEER)
     public List<SesionAplicacion> listSessions() {
-        return sesiones.findAll();
+        return listSessions(null, null);
+    }
+
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public List<SesionAplicacion> listSessions(SessionFilter filter, String sort) {
+        SessionQuerySpec spec = buildSessionQuery(filter, sort);
+        return sesiones.findAll(spec.spec(), spec.sort());
+    }
+
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public Page<SesionAplicacion> listSessionsPage(SessionFilter filter, int page, int size, String sort) {
+        SessionQuerySpec spec = buildSessionQuery(filter, sort);
+        return sesiones.findAll(spec.spec(), QueryFilterSupport.pageRequest(page, size, spec.sort()));
+    }
+
+    private SessionQuerySpec buildSessionQuery(SessionFilter filter, String sort) {
+        Sort parsedSort = QueryFilterSupport.parseSort(sort, DEFAULT_SORT, SORT_FIELDS, NULLABLE_SORT_FIELDS);
+        SessionFilter effective = filter == null ? SessionFilter.empty() : filter;
+        EstadoSesionAplicacion estado = QueryFilterSupport.parseEnum(
+                effective.estado(), EstadoSesionAplicacion.class, "Estado de sesion");
+        String pattern = QueryFilterSupport.toLikePattern(effective.q());
+        QueryFilterSupport.DateRange range = QueryFilterSupport.parseDateRange(effective.from(), effective.to());
+
+        Specification<SesionAplicacion> spec = (root, query, cb) -> {
+            boolean countQuery = QueryFilterSupport.isCountQuery(query);
+            Join<SesionAplicacion, VersionTest> versionJoin = null;
+            if (!countQuery) {
+                Fetch<SesionAplicacion, VersionTest> fetched = root.fetch("versionTest", JoinType.INNER);
+                if (fetched instanceof Join<?, ?> join) {
+                    @SuppressWarnings("unchecked")
+                    Join<SesionAplicacion, VersionTest> typed = (Join<SesionAplicacion, VersionTest>) join;
+                    versionJoin = typed;
+                }
+                root.fetch("creadoPor", JoinType.LEFT);
+            }
+            List<Predicate> predicates = new ArrayList<>();
+            if (estado != null) {
+                predicates.add(cb.equal(root.get("estado"), estado));
+            }
+            if (effective.versionTestId() != null) {
+                predicates.add(cb.equal(root.get("versionTest").get("id"), effective.versionTestId()));
+            }
+            if (effective.testId() != null) {
+                if (versionJoin == null) {
+                    versionJoin = root.join("versionTest", JoinType.INNER);
+                }
+                predicates.add(cb.equal(versionJoin.get("test").get("id"), effective.testId()));
+            }
+            if (pattern != null) {
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("codigoSesion")), pattern, '\\'),
+                        cb.like(cb.lower(root.get("nombreSesion")), pattern, '\\')));
+            }
+            QueryFilterSupport.addDateRangePredicates(cb, root.get("inicioProgramado"), range, predicates);
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
+        return new SessionQuerySpec(spec, parsedSort);
+    }
+
+    private record SessionQuerySpec(Specification<SesionAplicacion> spec, Sort sort) {
+    }
+
+    public record SessionFilter(
+            String estado,
+            Long versionTestId,
+            Long testId,
+            String q,
+            String from,
+            String to) {
+        public static SessionFilter empty() {
+            return new SessionFilter(null, null, null, null, null, null);
+        }
     }
 
     @PreAuthorize(SecurityPermissions.SESION_LEER)

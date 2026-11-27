@@ -5,6 +5,7 @@ import com.uam.psychoform.assessment.dto.*;
 import com.uam.psychoform.assessment.service.*;
 import com.uam.psychoform.dto.ApiResponse;
 import com.uam.psychoform.dto.EntityView;
+import com.uam.psychoform.dto.PageResponse;
 import com.uam.psychoform.security.SecurityPermissions;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -31,8 +32,22 @@ public class SessionController {
 
     @GetMapping
     @PreAuthorize(SecurityPermissions.SESION_LEER)
-    public ApiResponse<?> list() {
-        return ApiResponse.ok(EntityView.of(management.listSessions()));
+    public ApiResponse<?> list(
+            @RequestParam(required = false) String estado,
+            @RequestParam(required = false) Long versionTestId,
+            @RequestParam(required = false) Long testId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "inicioProgramado,desc") String sort) {
+        var filter = new SessionManagementService.SessionFilter(estado, versionTestId, testId, q, from, to);
+        if (page == null) {
+            return ApiResponse.ok(EntityView.of(management.listSessions(filter, sort)));
+        }
+        return ApiResponse.ok(PageResponse.from(
+                management.listSessionsPage(filter, page, size, sort).map(EntityView::of)));
     }
 
     @GetMapping("/{id}")

@@ -26,9 +26,18 @@ public class ParticipantController {
     @GetMapping
     @PreAuthorize(SecurityPermissions.PARTICIPANTE_LEER)
     public ApiResponse<PageResponse<Object>> list(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String estado,
+            @RequestParam(required = false) Short sexoId,
+            @RequestParam(required = false) Short carreraId,
+            @RequestParam(required = false) Short cohorteId,
+            @RequestParam(required = false) Short grupoAcademicoId,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.ok(PageResponse.from(service.listar(page, size).map(EntityView::of)));
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "apellidos,asc") String sort) {
+        var filter = new ParticipanteService.ParticipantFilter(q, estado, sexoId, carreraId, cohorteId,
+                grupoAcademicoId);
+        return ApiResponse.ok(PageResponse.from(service.listar(filter, page, size, sort).map(EntityView::of)));
     }
 
     @GetMapping("/{id}")
