@@ -61,7 +61,8 @@ class ParticipantRuntimeCompletadoWebTest {
         var access = new ParticipantAccessService(asignaciones, null, null, null, CLOCK);
         ParticipantEvaluationView evaluation = mock(ParticipantEvaluationView.class);
         when(evaluation.getEvaluationPayload(77L)).thenReturn(new ParticipantEvaluationView.EvaluationPayload(
-                5L, 77L, 10L, "Ana", "Sesion", estadoSesion.name(), null, "COMPLETADO", List.of()));
+                5L, 77L, 10L, "Ana", "Sesion", estadoSesion.name(), null, "COMPLETADO", List.of(),
+                java.time.OffsetDateTime.parse("2026-06-24T11:58:00Z")));
         var controller = new ParticipantRuntimeController(jwt, mock(ParticipantRuntimeService.class), access,
                 mock(ParticipantAnswerService.class), evaluation, mock(SubtestTimingService.class));
         return MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new GlobalExceptionHandler()).build();
@@ -75,7 +76,8 @@ class ParticipantRuntimeCompletadoWebTest {
     void yoConAsignacionCompletadaResponde200ConEstadoFinal() throws Exception {
         mvc(EstadoAsignacion.COMPLETADO, EstadoSesionAplicacion.ABIERTA)
                 .perform(get("/evaluacion-participante/yo")).andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.attemptStatus").value("COMPLETADO"));
+                .andExpect(jsonPath("$.data.attemptStatus").value("COMPLETADO"))
+                .andExpect(jsonPath("$.data.finishedAt").value("2026-06-24T11:58:00Z"));
     }
 
     @Test
