@@ -63,6 +63,8 @@ class ParticipantRuntimeServiceTest {
     private final AuditLogService audit = Mockito.mock(AuditLogService.class);
     private final com.uam.psychoform.audit.repository.AuditoriaRepository auditorias =
             Mockito.mock(com.uam.psychoform.audit.repository.AuditoriaRepository.class);
+    private final com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository rechazos =
+            Mockito.mock(com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository.class);
     private final PausaSesionRepository pausas = Mockito.mock(PausaSesionRepository.class);
     private final jakarta.persistence.EntityManager entityManager = Mockito.mock(jakarta.persistence.EntityManager.class);
     private final SessionWriteGuard guard = new SessionWriteGuard(entityManager);
@@ -74,7 +76,7 @@ class ParticipantRuntimeServiceTest {
     private final SubtestClosingService closing = new SubtestClosingService(intentoSubtests, respuestas, items, timing);
     private final ParticipantRuntimeService service = new ParticipantRuntimeService(sesiones, sesionSubtests,
             asignaciones, intentos, intentoSubtests, participantes, usuarios, tokenService, currentActor, audit, CLOCK,
-            guard, closing, auditorias);
+            guard, closing, auditorias, rechazos);
 
     @BeforeEach
     void abiertaPorDefecto() {

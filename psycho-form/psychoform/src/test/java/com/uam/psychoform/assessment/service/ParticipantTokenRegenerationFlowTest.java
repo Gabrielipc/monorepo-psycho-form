@@ -47,7 +47,7 @@ class ParticipantTokenRegenerationFlowTest {
         when(asignaciones.findByIdForUpdate(77L)).thenReturn(Optional.of(asignacion));
 
         var runtime = new ParticipantRuntimeService(null, null, asignaciones, null, null, null, null, tokens, null,
-                mock(com.uam.psychoform.audit.service.AuditLogService.class), CLOCK, null, null, null);
+                mock(com.uam.psychoform.audit.service.AuditLogService.class), CLOCK, null, null, null, null);
         var access = new ParticipantAccessService(asignaciones, null, tokens, null, CLOCK);
         assertThat(access.grantParticipantAccess(77L, viejo).assignmentId()).isEqualTo(77L);
 

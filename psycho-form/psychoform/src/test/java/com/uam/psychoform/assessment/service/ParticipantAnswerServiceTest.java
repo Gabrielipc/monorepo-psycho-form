@@ -42,12 +42,14 @@ class ParticipantAnswerServiceTest {
     private final OpcionItemLookupRepository opciones = Mockito.mock(OpcionItemLookupRepository.class);
     private final SessionWriteGuard guard = Mockito.mock(SessionWriteGuard.class);
     private final IntentoSubtestRepository intentoSubtests = Mockito.mock(IntentoSubtestRepository.class);
+    private final com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository rechazos =
+            Mockito.mock(com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository.class);
     private final Clock clock = Clock.fixed(Instant.parse("2026-06-24T12:00:00Z"), ZoneOffset.UTC);
     private final SubtestTimingService timing = new SubtestTimingService(intentoSubtests,
             Mockito.mock(PausaSesionRepository.class), clock);
     private final ParticipantAnswerService service = new ParticipantAnswerService(intentos, respuestas,
             opcionesSeleccionadas, items, opciones, guard, intentoSubtests,
-            new SubtestClosingService(intentoSubtests, respuestas, items, timing), clock);
+            new SubtestClosingService(intentoSubtests, respuestas, items, timing), rechazos, clock);
 
     @Test
     void operacionesDeRespuestaDeParticipanteNoUsanPermisoInternoRespuestaRegistrar() throws Exception {
@@ -244,6 +246,7 @@ class ParticipantAnswerServiceTest {
                 "TIEMPO_AGOTADO", null));
         assertThat(subtest.getEstado()).isEqualTo(EstadoIntento.COMPLETADO);
         assertThat(respuestasGuardadas()).extracting(r -> r.getItem().getId()).containsExactly(11L);
+        Mockito.verify(rechazos).registrar(1L, 10L, "TIEMPO_AGOTADO", java.time.LocalDateTime.now(clock));
     }
 
     @Test
@@ -281,6 +284,11 @@ class ParticipantAnswerServiceTest {
                 new ParticipantAnswerService.BulkSyncResult(10L, "GUARDADA", null, 500L),
                 new ParticipantAnswerService.BulkSyncResult(20L, "RECHAZADA", "SUBTEST_FINALIZADO", null),
                 new ParticipantAnswerService.BulkSyncResult(30L, "RECHAZADA", "SUBTEST_NO_INICIADO", null));
+        // B17: solo las RECHAZADA llegan a la bitacora; la GUARDADA no.
+        Mockito.verify(rechazos).registrar(1L, 20L, "SUBTEST_FINALIZADO", java.time.LocalDateTime.now(clock));
+        Mockito.verify(rechazos).registrar(1L, 30L, "SUBTEST_NO_INICIADO", java.time.LocalDateTime.now(clock));
+        Mockito.verify(rechazos, Mockito.never()).registrar(Mockito.eq(1L), Mockito.eq(10L), Mockito.anyString(),
+                Mockito.any());
     }
 
     private static ParticipantAnswerService.SaveAnswerCommand cmd(long itemId) {

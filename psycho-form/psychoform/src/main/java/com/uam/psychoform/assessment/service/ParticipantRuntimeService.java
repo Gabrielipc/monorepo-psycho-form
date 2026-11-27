@@ -14,6 +14,7 @@ import com.uam.psychoform.assessment.repository.AsignacionTestRepository;
 import com.uam.psychoform.assessment.repository.CompletedSubtestCount;
 import com.uam.psychoform.assessment.repository.IntentoSubtestRepository;
 import com.uam.psychoform.assessment.repository.IntentoTestRepository;
+import com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository;
 import com.uam.psychoform.assessment.repository.SesionAplicacionRepository;
 import com.uam.psychoform.assessment.repository.SesionSubtestRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -70,12 +71,14 @@ public class ParticipantRuntimeService {
     private final SessionWriteGuard sessionWriteGuard;
     private final SubtestClosingService closing;
     private final AuditoriaRepository auditorias;
+    private final RespuestaRechazadaRepository rechazos;
 
     public ParticipantRuntimeService(SesionAplicacionRepository sesiones, SesionSubtestRepository sesionSubtests,
             AsignacionTestRepository asignaciones, IntentoTestRepository intentos,
             IntentoSubtestRepository intentoSubtests, ParticipanteRepository participantes, UsuarioRepository usuarios,
             ParticipantTokenService tokenService, CurrentActor currentActor, AuditLogService audit, Clock clock,
-            SessionWriteGuard sessionWriteGuard, SubtestClosingService closing, AuditoriaRepository auditorias) {
+            SessionWriteGuard sessionWriteGuard, SubtestClosingService closing, AuditoriaRepository auditorias,
+            RespuestaRechazadaRepository rechazos) {
         this.sesiones = sesiones;
         this.sesionSubtests = sesionSubtests;
         this.asignaciones = asignaciones;
@@ -90,6 +93,7 @@ public class ParticipantRuntimeService {
         this.sessionWriteGuard = sessionWriteGuard;
         this.closing = closing;
         this.auditorias = auditorias;
+        this.rechazos = rechazos;
     }
 
     @Transactional
@@ -375,6 +379,27 @@ public class ParticipantRuntimeService {
         }).toList();
     }
 
+    /** Una query agregada por sesion: total de filas y las mas recientes de cada intento (sin N+1). */
+    private Map<Long, RejectedSummary> rejectedAnswersByAttempt(Long sessionId) {
+        Map<Long, List<SessionAssignmentDto.RejectedAnswerDto>> recent = new java.util.LinkedHashMap<>();
+        Map<Long, Integer> counts = new java.util.HashMap<>();
+        for (RespuestaRechazadaRepository.RechazoDeIntento row : rechazos.findRecientesPorSesion(sessionId,
+                SessionAssignmentDto.MAX_REJECTED_ANSWERS)) {
+            counts.put(row.getIntentoId(), row.getTotal().intValue());
+            recent.computeIfAbsent(row.getIntentoId(), k -> new java.util.ArrayList<>())
+                    .add(new SessionAssignmentDto.RejectedAnswerDto(row.getItemId(), row.getCodigo(),
+                            row.getRechazadoEn()));
+        }
+        Map<Long, RejectedSummary> result = new java.util.HashMap<>();
+        recent.forEach((attemptId, rows) -> result.put(attemptId,
+                new RejectedSummary(counts.get(attemptId), List.copyOf(rows))));
+        return result;
+    }
+
+    private record RejectedSummary(int count, List<SessionAssignmentDto.RejectedAnswerDto> recent) {
+        static final RejectedSummary NONE = new RejectedSummary(0, List.of());
+    }
+
     private static JsonNode parsePayload(String json) {
         if (json == null || json.isBlank()) {
             return JSON.createObjectNode();
@@ -413,6 +438,7 @@ public class ParticipantRuntimeService {
                 : intentoSubtests.countCompletedByIntentoIds(attemptIds).stream()
                         .collect(Collectors.toMap(CompletedSubtestCount::getIntentoId,
                                 CompletedSubtestCount::getCompletedCount));
+        Map<Long, RejectedSummary> rejectedByAttempt = rejectedAnswersByAttempt(sessionId);
         return list.stream().map(asg -> {
             IntentoTest attempt = attemptsByAssignment.get(asg.getId());
             String state = "no-iniciado";
@@ -463,6 +489,9 @@ public class ParticipantRuntimeService {
                 }
             }
 
+            RejectedSummary rejected = attempt == null
+                    ? RejectedSummary.NONE
+                    : rejectedByAttempt.getOrDefault(attempt.getId(), RejectedSummary.NONE);
             return new SessionAssignmentDto(
                 asg.getId(),
                 attempt == null ? null : attempt.getId(),
@@ -474,7 +503,9 @@ public class ParticipantRuntimeService {
                 currentSubtestId,
                 progress,
                 lastActivity,
-                asg.getTokenExpiraEn().toString()
+                asg.getTokenExpiraEn().toString(),
+                rejected.count(),
+                rejected.recent()
             );
         }).toList();
     }
