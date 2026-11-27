@@ -139,6 +139,12 @@ public class SessionController {
                 Duration.ofHours(ttlHours == null ? 8 : ttlHours)));
     }
 
+    @GetMapping("/{id}/incidencias")
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public ApiResponse<?> incidences(@PathVariable Long id) {
+        return ApiResponse.ok(runtime.listIncidences(id));
+    }
+
     @PostMapping("/{id}/incidencias")
     @PreAuthorize(SecurityPermissions.SESION_APLICAR)
     public ApiResponse<Void> incidence(@PathVariable Long id, @Valid @RequestBody IncidenceRequest request) {

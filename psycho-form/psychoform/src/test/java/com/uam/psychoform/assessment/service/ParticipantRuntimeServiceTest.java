@@ -61,6 +61,8 @@ class ParticipantRuntimeServiceTest {
     private final ParticipantTokenService tokenService = Mockito.mock(ParticipantTokenService.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final AuditLogService audit = Mockito.mock(AuditLogService.class);
+    private final com.uam.psychoform.audit.repository.AuditoriaRepository auditorias =
+            Mockito.mock(com.uam.psychoform.audit.repository.AuditoriaRepository.class);
     private final PausaSesionRepository pausas = Mockito.mock(PausaSesionRepository.class);
     private final jakarta.persistence.EntityManager entityManager = Mockito.mock(jakarta.persistence.EntityManager.class);
     private final SessionWriteGuard guard = new SessionWriteGuard(entityManager);
@@ -72,7 +74,7 @@ class ParticipantRuntimeServiceTest {
     private final SubtestClosingService closing = new SubtestClosingService(intentoSubtests, respuestas, items, timing);
     private final ParticipantRuntimeService service = new ParticipantRuntimeService(sesiones, sesionSubtests,
             asignaciones, intentos, intentoSubtests, participantes, usuarios, tokenService, currentActor, audit, CLOCK,
-            guard, closing);
+            guard, closing, auditorias);
 
     @BeforeEach
     void abiertaPorDefecto() {
@@ -400,6 +402,8 @@ class ParticipantRuntimeServiceTest {
     void recordIncidenceRegistraAuditoriaConParticipanteYTextoEscapado() {
         UUID participantId = UUID.randomUUID();
         when(sesiones.existsById(10L)).thenReturn(true);
+        when(asignaciones.findBySesionAplicacionIdAndParticipanteId(10L, participantId))
+                .thenReturn(Optional.of(new AsignacionTest()));
 
         service.recordIncidence(10L, new ParticipantRuntimeService.IncidenceCommand(participantId, "Dijo \"alto\""));
 

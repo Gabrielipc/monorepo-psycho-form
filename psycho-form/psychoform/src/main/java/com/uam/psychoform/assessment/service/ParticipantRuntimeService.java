@@ -16,6 +16,13 @@ import com.uam.psychoform.assessment.repository.IntentoSubtestRepository;
 import com.uam.psychoform.assessment.repository.IntentoTestRepository;
 import com.uam.psychoform.assessment.repository.SesionAplicacionRepository;
 import com.uam.psychoform.assessment.repository.SesionSubtestRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.uam.psychoform.assessment.dto.SessionIncidenceDto;
+import com.uam.psychoform.audit.model.Auditoria;
+import com.uam.psychoform.audit.repository.AuditoriaRepository;
 import com.uam.psychoform.audit.service.AuditLogService;
 import com.uam.psychoform.security.CurrentActor;
 import com.uam.psychoform.security.SecurityPermissions;
@@ -28,9 +35,11 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.Period;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -42,6 +51,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class ParticipantRuntimeService {
+    static final String ACCION_INCIDENCIA = "INCIDENCIA_SESION";
+    static final String ENTIDAD_INCIDENCIA = "sesion_aplicacion";
+    static final int MAX_TEXTO_INCIDENCIA = 1000;
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private final SesionAplicacionRepository sesiones;
     private final SesionSubtestRepository sesionSubtests;
     private final AsignacionTestRepository asignaciones;
@@ -55,12 +69,13 @@ public class ParticipantRuntimeService {
     private final Clock clock;
     private final SessionWriteGuard sessionWriteGuard;
     private final SubtestClosingService closing;
+    private final AuditoriaRepository auditorias;
 
     public ParticipantRuntimeService(SesionAplicacionRepository sesiones, SesionSubtestRepository sesionSubtests,
             AsignacionTestRepository asignaciones, IntentoTestRepository intentos,
             IntentoSubtestRepository intentoSubtests, ParticipanteRepository participantes, UsuarioRepository usuarios,
             ParticipantTokenService tokenService, CurrentActor currentActor, AuditLogService audit, Clock clock,
-            SessionWriteGuard sessionWriteGuard, SubtestClosingService closing) {
+            SessionWriteGuard sessionWriteGuard, SubtestClosingService closing, AuditoriaRepository auditorias) {
         this.sesiones = sesiones;
         this.sesionSubtests = sesionSubtests;
         this.asignaciones = asignaciones;
@@ -74,6 +89,7 @@ public class ParticipantRuntimeService {
         this.clock = clock;
         this.sessionWriteGuard = sessionWriteGuard;
         this.closing = closing;
+        this.auditorias = auditorias;
     }
 
     @Transactional
@@ -305,10 +321,82 @@ public class ParticipantRuntimeService {
         if (!sesiones.existsById(sessionId)) {
             throw new EntityNotFoundException("Sesion no encontrada: " + sessionId);
         }
-        String metadata = "{\"participantId\":\"" + command.participantId() + "\",\"text\":\""
-                + json(command.text()) + "\"}";
-        audit.recordTrusted(new AuditLogService.AuditEvent("INCIDENCIA_SESION", "sesion_aplicacion",
-                String.valueOf(sessionId), null, metadata, null, null));
+        String text = command.text();
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("El texto de la incidencia es obligatorio");
+        }
+        if (text.length() > MAX_TEXTO_INCIDENCIA) {
+            throw new IllegalArgumentException(
+                    "El texto de la incidencia no puede superar " + MAX_TEXTO_INCIDENCIA + " caracteres");
+        }
+        if (command.participantId() != null && asignaciones
+                .findBySesionAplicacionIdAndParticipanteId(sessionId, command.participantId()).isEmpty()) {
+            throw new IllegalArgumentException("El participante no esta asignado a la sesion");
+        }
+        ObjectNode metadata = JSON.createObjectNode();
+        if (command.participantId() == null) {
+            metadata.putNull("participantId");
+        } else {
+            metadata.put("participantId", command.participantId().toString());
+        }
+        metadata.put("text", text);
+        audit.recordTrusted(new AuditLogService.AuditEvent(ACCION_INCIDENCIA, ENTIDAD_INCIDENCIA,
+                String.valueOf(sessionId), null, metadata.toString(), null, null));
+    }
+
+    /** Incidencias de la sesion, de la mas antigua a la mas reciente: una query de auditoria y una carga en lote. */
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    public List<SessionIncidenceDto> listIncidences(Long sessionId) {
+        if (!sesiones.existsById(sessionId)) {
+            throw new EntityNotFoundException("Sesion no encontrada: " + sessionId);
+        }
+        List<Auditoria> rows = auditorias.findByAccionAndEntidadWithUsuario(ACCION_INCIDENCIA, ENTIDAD_INCIDENCIA,
+                String.valueOf(sessionId));
+        List<JsonNode> payloads = rows.stream().map(row -> parsePayload(row.getValorNuevo())).toList();
+        Set<UUID> participantIds = new HashSet<>();
+        List<UUID> parsedIds = payloads.stream().map(ParticipantRuntimeService::participantIdOf).toList();
+        parsedIds.stream().filter(Objects::nonNull).forEach(participantIds::add);
+        Map<UUID, Participante> participantsById = participantIds.isEmpty()
+                ? Map.of()
+                : participantes.findAllById(participantIds).stream()
+                        .collect(Collectors.toMap(Participante::getId, Function.identity()));
+        return java.util.stream.IntStream.range(0, rows.size()).mapToObj(i -> {
+            Auditoria row = rows.get(i);
+            UUID participantId = parsedIds.get(i);
+            Participante participant = participantId == null ? null : participantsById.get(participantId);
+            JsonNode text = payloads.get(i).get("text");
+            return new SessionIncidenceDto(
+                    row.getId(),
+                    participantId,
+                    participant == null ? null : participant.getNombres() + " " + participant.getApellidos(),
+                    text == null || text.isNull() ? "" : text.asText(),
+                    row.getCreadoEn(),
+                    row.getUsuario() == null ? null : row.getUsuario().getNombreCompleto());
+        }).toList();
+    }
+
+    private static JsonNode parsePayload(String json) {
+        if (json == null || json.isBlank()) {
+            return JSON.createObjectNode();
+        }
+        try {
+            JsonNode node = JSON.readTree(json);
+            return node == null || !node.isObject() ? JSON.createObjectNode() : node;
+        } catch (JsonProcessingException ex) {
+            return JSON.createObjectNode();
+        }
+    }
+
+    private static UUID participantIdOf(JsonNode payload) {
+        JsonNode node = payload.get("participantId");
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(node.asText());
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     @Transactional(readOnly = true)
@@ -389,10 +477,6 @@ public class ParticipantRuntimeService {
                 asg.getTokenExpiraEn().toString()
             );
         }).toList();
-    }
-
-    private static String json(String value) {
-        return (value == null ? "" : value).replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     public record IncidenceCommand(UUID participantId, String text) {
