@@ -22,6 +22,7 @@ import com.uam.psychoform.storage.ObjectStorageService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
@@ -33,7 +34,10 @@ import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
@@ -48,9 +52,12 @@ public class InstrumentImageService {
     private final ObjectStorageService storage;
     private final Clock clock;
     private final ImageResourceReleaser releaser;
+    private final TransactionTemplate transaction;
+    private final TransactionTemplate freshTransaction;
 
     public InstrumentImageService(EntityManager em, VersionTestRepository versions, UsuarioRepository users,
-            CurrentActor currentActor, ObjectStorageService storage, Clock clock, ImageResourceReleaser releaser) {
+            CurrentActor currentActor, ObjectStorageService storage, Clock clock, ImageResourceReleaser releaser,
+            PlatformTransactionManager transactionManager) {
         this.em = em;
         this.versions = versions;
         this.users = users;
@@ -58,13 +65,20 @@ public class InstrumentImageService {
         this.storage = storage;
         this.clock = clock;
         this.releaser = releaser;
+        this.transaction = new TransactionTemplate(transactionManager);
+        this.freshTransaction = new TransactionTemplate(transactionManager);
+        this.freshTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageResourceUploadResponse uploadLooseResource(MultipartFile file, String altText, String idempotencyKey)
             throws IOException {
         String uploadKey = scopedKey(ImageUploadKeys.Operation.LOOSE, idempotencyKey);
+        return inTransaction(uploadKey, () -> uploadLooseResourceInTransaction(file, uploadKey));
+    }
+
+    private ImageResourceUploadResponse uploadLooseResourceInTransaction(MultipartFile file, String uploadKey)
+            throws IOException {
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
@@ -84,18 +98,22 @@ public class InstrumentImageService {
         }
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse uploadItemImage(long itemId, MultipartFile file, Integer order, String altText,
             String role) throws IOException {
         return uploadItemImage(itemId, file, order, altText, role, null);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse uploadItemImage(long itemId, MultipartFile file, Integer order, String altText,
             String role, String idempotencyKey) throws IOException {
         String uploadKey = scopedKey(ImageUploadKeys.Operation.ITEM, idempotencyKey);
+        return inTransaction(uploadKey,
+                () -> uploadItemImageInTransaction(itemId, file, order, altText, role, uploadKey));
+    }
+
+    private ImageUploadResponse uploadItemImageInTransaction(long itemId, MultipartFile file, Integer order,
+            String altText, String role, String uploadKey) throws IOException {
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         Item item = find(Item.class, itemId);
@@ -158,18 +176,21 @@ public class InstrumentImageService {
         return item;
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse uploadOptionImage(long optionId, MultipartFile file, Integer order, String altText)
             throws IOException {
         return uploadOptionImage(optionId, file, order, altText, null);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse uploadOptionImage(long optionId, MultipartFile file, Integer order, String altText,
             String idempotencyKey) throws IOException {
         String uploadKey = scopedKey(ImageUploadKeys.Operation.OPTION, idempotencyKey);
+        return inTransaction(uploadKey, () -> uploadOptionImageInTransaction(optionId, file, order, altText, uploadKey));
+    }
+
+    private ImageUploadResponse uploadOptionImageInTransaction(long optionId, MultipartFile file, Integer order,
+            String altText, String uploadKey) throws IOException {
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         OpcionItem option = find(OpcionItem.class, optionId);
@@ -199,81 +220,84 @@ public class InstrumentImageService {
         }
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceItemImage(long itemId, long imageId, MultipartFile file, String altText,
             String role) throws IOException {
         return replaceItemImage(itemId, imageId, file, altText, role, null);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceItemImage(long itemId, long imageId, MultipartFile file, String altText,
             String role, String idempotencyKey) throws IOException {
-        ImagenItem image = find(ImagenItem.class, imageId);
-        if (!image.getItem().getId().equals(itemId)) {
-            throw new EntityNotFoundException("Imagen de item no encontrada: " + imageId);
-        }
-        requireDraft(image.getItem().getSubtest().getVersionTest().getId());
-        return replaceItemImage(image, itemId, file, altText, role, idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_ITEM, idempotencyKey);
+        return inTransaction(uploadKey, () -> {
+            ImagenItem image = find(ImagenItem.class, imageId);
+            if (!image.getItem().getId().equals(itemId)) {
+                throw new EntityNotFoundException("Imagen de item no encontrada: " + imageId);
+            }
+            requireDraft(image.getItem().getSubtest().getVersionTest().getId());
+            return replaceItemImage(image, itemId, file, altText, role, uploadKey);
+        });
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceItemImageByOrder(long itemId, int order, MultipartFile file, String altText,
             String role) throws IOException {
         return replaceItemImageByOrder(itemId, order, file, altText, role, null);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceItemImageByOrder(long itemId, int order, MultipartFile file, String altText,
             String role, String idempotencyKey) throws IOException {
-        Item item = find(Item.class, itemId);
-        requireDraft(item.getSubtest().getVersionTest().getId());
-        ImagenItem image = findItemImageByOrder(itemId, order);
-        return replaceItemImage(image, itemId, file, altText, role, idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_ITEM, idempotencyKey);
+        return inTransaction(uploadKey, () -> {
+            Item item = find(Item.class, itemId);
+            requireDraft(item.getSubtest().getVersionTest().getId());
+            ImagenItem image = findItemImageByOrder(itemId, order);
+            return replaceItemImage(image, itemId, file, altText, role, uploadKey);
+        });
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceOptionImage(long optionId, long imageId, MultipartFile file, String altText)
             throws IOException {
         return replaceOptionImage(optionId, imageId, file, altText, null);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceOptionImage(long optionId, long imageId, MultipartFile file, String altText,
             String idempotencyKey) throws IOException {
-        ImagenOpcion image = find(ImagenOpcion.class, imageId);
-        if (!image.getOpcion().getId().equals(optionId)) {
-            throw new EntityNotFoundException("Imagen de opcion no encontrada: " + imageId);
-        }
-        requireDraft(image.getOpcion().getItem().getSubtest().getVersionTest().getId());
-        return replaceOptionImage(image, optionId, file, altText, idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_OPTION, idempotencyKey);
+        return inTransaction(uploadKey, () -> {
+            ImagenOpcion image = find(ImagenOpcion.class, imageId);
+            if (!image.getOpcion().getId().equals(optionId)) {
+                throw new EntityNotFoundException("Imagen de opcion no encontrada: " + imageId);
+            }
+            requireDraft(image.getOpcion().getItem().getSubtest().getVersionTest().getId());
+            return replaceOptionImage(image, optionId, file, altText, uploadKey);
+        });
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceOptionImageByOrder(long optionId, int order, MultipartFile file, String altText)
             throws IOException {
         return replaceOptionImageByOrder(optionId, order, file, altText, null);
     }
 
-    @Transactional
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse replaceOptionImageByOrder(long optionId, int order, MultipartFile file, String altText,
             String idempotencyKey) throws IOException {
-        OpcionItem option = find(OpcionItem.class, optionId);
-        requireDraft(option.getItem().getSubtest().getVersionTest().getId());
-        ImagenOpcion image = findOptionImageByOrder(optionId, order);
-        return replaceOptionImage(image, optionId, file, altText, idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_OPTION, idempotencyKey);
+        return inTransaction(uploadKey, () -> {
+            OpcionItem option = find(OpcionItem.class, optionId);
+            requireDraft(option.getItem().getSubtest().getVersionTest().getId());
+            ImagenOpcion image = findOptionImageByOrder(optionId, order);
+            return replaceOptionImage(image, optionId, file, altText, uploadKey);
+        });
     }
 
     private ImageUploadResponse replaceItemImage(ImagenItem image, long itemId, MultipartFile file, String altText,
-            String role, String idempotencyKey) throws IOException {
-        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_ITEM, idempotencyKey);
+            String role, String uploadKey) throws IOException {
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
@@ -309,8 +333,7 @@ public class InstrumentImageService {
     }
 
     private ImageUploadResponse replaceOptionImage(ImagenOpcion image, long optionId, MultipartFile file,
-            String altText, String idempotencyKey) throws IOException {
-        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_OPTION, idempotencyKey);
+            String altText, String uploadKey) throws IOException {
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
@@ -338,6 +361,61 @@ public class InstrumentImageService {
             deleteBestEffort(key);
             throw ex;
         }
+    }
+
+    @FunctionalInterface
+    private interface TransactionalWork<T> {
+        T run() throws IOException;
+    }
+
+    /**
+     * Ejecuta la operacion en una transaccion y, si pierde una carrera por la misma Idempotency-Key, la repite UNA vez
+     * en una transaccion NUEVA.
+     *
+     * <p>Dos peticiones simultaneas con la misma clave consultan antes de que exista la fila; el indice unico
+     * {@code ux_recurso_multimedia_clave_subida} deja pasar a una y la otra recibe la violacion (con Postgres, tras
+     * esperar a que la ganadora confirme). La perdedora ya borro el objeto que habia subido a storage (el catch de cada
+     * operacion) y su transaccion esta revertida, asi que no puede consultar en ella: la reintenta desde cero, y esta
+     * vez la consulta por clave encuentra al recurso ganador (mismo hash: se devuelve; otro hash: 409). Se reintenta en
+     * lugar de subir despues de reservar la clave porque es lo mas simple y no cambia el flujo normal.
+     */
+    private <T> T inTransaction(String uploadKey, TransactionalWork<T> work) throws IOException {
+        try {
+            return execute(transaction, work);
+        } catch (RuntimeException ex) {
+            if (uploadKey == null || !isUploadKeyViolation(ex)) {
+                throw ex;
+            }
+            return execute(freshTransaction, work);
+        }
+    }
+
+    private <T> T execute(TransactionTemplate template, TransactionalWork<T> work) throws IOException {
+        try {
+            return template.execute(status -> {
+                try {
+                    return work.run();
+                } catch (IOException ex) {
+                    throw new UncheckedIOException(ex);
+                }
+            });
+        } catch (UncheckedIOException ex) {
+            throw ex.getCause();
+        }
+    }
+
+    private boolean isUploadKeyViolation(Throwable ex) {
+        for (Throwable cursor = ex; cursor != null; cursor = cursor.getCause()) {
+            if (cursor instanceof java.sql.SQLException sql && "23505".equals(sql.getSQLState())
+                    && sql.getMessage() != null && sql.getMessage().contains("ux_recurso_multimedia_clave_subida")) {
+                return true;
+            }
+            if (cursor.getMessage() != null && cursor.getMessage().contains("ux_recurso_multimedia_clave_subida")
+                    && cursor.getMessage().toLowerCase().contains("duplicate")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private byte[] validatedBytes(MultipartFile file) throws IOException {

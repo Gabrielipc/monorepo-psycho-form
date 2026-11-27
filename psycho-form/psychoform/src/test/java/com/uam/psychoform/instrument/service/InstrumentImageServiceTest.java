@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class InstrumentImageServiceTest {
     private static final UUID ACTOR_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
@@ -45,7 +46,7 @@ class InstrumentImageServiceTest {
     private final ObjectStorageService storage = Mockito.mock(ObjectStorageService.class);
     private final InstrumentImageService service = new InstrumentImageService(em, versions, users, currentActor,
             storage, Clock.fixed(Instant.parse("2026-06-26T10:15:30Z"), ZoneOffset.UTC),
-            new ImageResourceReleaser(em, storage));
+            new ImageResourceReleaser(em, storage), Mockito.mock(PlatformTransactionManager.class));
 
     @Test
     void rechazaArchivoVacioSinSubirAStorage() {
