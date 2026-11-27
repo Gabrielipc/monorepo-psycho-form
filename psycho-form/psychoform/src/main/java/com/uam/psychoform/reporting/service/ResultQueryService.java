@@ -30,6 +30,7 @@ import com.uam.psychoform.scoring.model.ResultadoDimension;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
 import com.uam.psychoform.scoring.repository.ResultadoRepository;
+import com.uam.psychoform.scoring.service.ClaveCorrectnessEvaluator;
 import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
 import com.uam.psychoform.security.SecurityPermissions;
 import com.uam.psychoform.security.model.EstadoGeneral;
@@ -179,6 +180,11 @@ public class ResultQueryService {
         Map<Long, ClaveRespuesta> keysByItemId = claves.findOfficialKeysByVersionId(version.getId()).stream()
                 .collect(Collectors.toMap(key -> key.getItem().getId(), Function.identity(), (f, s) -> f));
 
+        List<Long> keyIds = keysByItemId.values().stream().map(ClaveRespuesta::getId).filter(java.util.Objects::nonNull)
+                .toList();
+        Map<Long, java.util.Set<Long>> optionSetsByKeyId = keyIds.isEmpty() ? Map.of()
+                : ClaveCorrectnessEvaluator.groupOptionSetRows(claves.findOptionSetRowsByKeyIds(keyIds));
+
         List<RespuestaItem> participantResponses = respuestas.findByIntentoIdWithItem(attemptId);
         Map<Long, RespuestaItem> responseByItemId = participantResponses.stream()
                 .collect(Collectors.toMap(resp -> resp.getItem().getId(), Function.identity(), (f, s) -> f));
@@ -236,14 +242,20 @@ public class ResultQueryService {
 
                 List<OpcionItem> itemOptions = optionsByItemId.getOrDefault(item.getId(), List.of());
                 ClaveRespuesta key = keysByItemId.get(item.getId());
-                Long correctOptionId = (key != null && key.getOpcionCorrecta() != null) ? key.getOpcionCorrecta().getId() : null;
+                // Misma precedencia que la calificacion: filas del conjunto, codigos esperados, opcion singular.
+                java.util.Set<Long> correctOptionIds = key == null ? java.util.Set.of()
+                        : ClaveCorrectnessEvaluator.correctOptionIds(item.getTipoRespuesta(), key,
+                                optionSetsByKeyId.get(key.getId()),
+                                itemOptions.stream()
+                                        .map(o -> new ClaveCorrectnessEvaluator.OptionRef(o.getId(), o.getCodigoOpcion()))
+                                        .toList());
                 List<Long> finalSelectedOptionIds = selectedOptionIds;
 
                 List<OptionDetailedResponseView> optionViews = itemOptions.stream().map(opt -> {
                     List<OptionImagePayload> optImages = imagesByOptionId.getOrDefault(opt.getId(), List.of()).stream()
                             .map(img -> new OptionImagePayload(img.getId(), "/items/images/resources/" + img.getRecurso().getId(), img.getNumeroOrden(), img.getTextoAlternativo()))
                             .toList();
-                    boolean isCorrect = correctOptionId != null && opt.getId().equals(correctOptionId);
+                    boolean isCorrect = correctOptionIds.contains(opt.getId());
                     boolean isSelected = finalSelectedOptionIds.contains(opt.getId());
 
                     return new OptionDetailedResponseView(

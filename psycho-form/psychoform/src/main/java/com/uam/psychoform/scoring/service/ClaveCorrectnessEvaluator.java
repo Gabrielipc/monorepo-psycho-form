@@ -5,9 +5,11 @@ import com.uam.psychoform.instrument.model.TipoRespuesta;
 import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -27,14 +29,60 @@ import java.util.stream.Collectors;
  * seleccionadas.</li>
  * </ul>
  */
-final class ClaveCorrectnessEvaluator {
+public final class ClaveCorrectnessEvaluator {
     private static final Pattern DIACRITICS = Pattern.compile("\\p{M}+");
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private ClaveCorrectnessEvaluator() {
     }
 
+    /** Opcion seleccionada por el participante (id y codigo) para evaluar la correccion. */
     record SelectedOption(Long id, String code) {
+    }
+
+    /** Opcion de un item (id y codigo) sobre la que se resuelven los codigos esperados de la clave. */
+    public record OptionRef(Long id, String code) {
+    }
+
+    /**
+     * Agrupa las filas {@code [claveId, opcionId]} de {@code clave_respuesta_opcion} por clave. Lo usan la
+     * calificacion y el detalle del resultado para partir del mismo conjunto de filas.
+     */
+    public static Map<Long, Set<Long>> groupOptionSetRows(Iterable<Object[]> rows) {
+        Map<Long, Set<Long>> optionIdsByKey = new HashMap<>();
+        for (Object[] row : rows) {
+            optionIdsByKey.computeIfAbsent(((Number) row[0]).longValue(), id -> new HashSet<>())
+                    .add(((Number) row[1]).longValue());
+        }
+        return optionIdsByKey;
+    }
+
+    /**
+     * Opciones correctas de una clave, con la misma precedencia con la que se califica. En OPCION_MULTIPLE: filas de
+     * {@code clave_respuesta_opcion} ({@code setOptionIds}); codigos de {@code textoEsperado} resueltos contra las
+     * opciones del item; la opcion singular {@code opcionCorrecta}. En el resto de tipos: {@code opcionCorrecta}.
+     */
+    public static Set<Long> correctOptionIds(TipoRespuesta tipo, ClaveRespuesta clave, Set<Long> setOptionIds,
+            List<OptionRef> itemOptions) {
+        if (clave == null) {
+            return Set.of();
+        }
+        if (tipo == TipoRespuesta.OPCION_MULTIPLE) {
+            if (setOptionIds != null && !setOptionIds.isEmpty()) {
+                return Set.copyOf(setOptionIds);
+            }
+            Set<String> expectedCodes = parseCodes(clave.getTextoEsperado());
+            if (!expectedCodes.isEmpty()) {
+                return itemOptions.stream()
+                        .filter(option -> expectedCodes.contains(normalizeCode(option.code())))
+                        .map(OptionRef::id)
+                        .collect(Collectors.toUnmodifiableSet());
+            }
+        }
+        if (clave.getOpcionCorrecta() != null && clave.getOpcionCorrecta().getId() != null) {
+            return Set.of(clave.getOpcionCorrecta().getId());
+        }
+        return Set.of();
     }
 
     static boolean isCorrect(TipoRespuesta tipo, ClaveRespuesta clave, List<SelectedOption> selected,

@@ -260,6 +260,57 @@ class ResultQueryServiceTest {
         assertThat(revisada.scoreObtained()).isEqualByComparingTo("4.00");
     }
 
+    @Test
+    void detalleMarcaCorrectasLasOpcionesDelTextoEsperadoComoLaCalificacion() {
+        DetalleEscenario d = detalleEscenario(com.uam.psychoform.instrument.model.TipoRespuesta.OPCION_MULTIPLE);
+        d.opciones.addAll(List.of(opcion(1L, "A", d.item), opcion(2L, "B", d.item), opcion(3L, "C", d.item),
+                opcion(4L, "D", d.item)));
+        d.clave.setTextoEsperado("C, d");
+        d.clave.setOpcionCorrecta(d.opciones.get(1)); // B: la precedencia manda sobre la opcion singular
+
+        assertThat(opcionesCorrectas(d)).containsExactly("C", "D");
+    }
+
+    @Test
+    void detalleUsaLasFilasDelConjuntoAntesQueElTextoEsperadoYLaOpcionSingular() {
+        DetalleEscenario d = detalleEscenario(com.uam.psychoform.instrument.model.TipoRespuesta.OPCION_MULTIPLE);
+        d.opciones.addAll(List.of(opcion(1L, "A", d.item), opcion(2L, "B", d.item), opcion(3L, "C", d.item)));
+        d.clave.setTextoEsperado("B");
+        d.clave.setOpcionCorrecta(d.opciones.get(1));
+        when(claves.findOptionSetRowsByKeyIds(List.of(41L))).thenReturn(List.<Object[]>of(
+                new Object[] {41L, 1L}, new Object[] {41L, 3L}));
+
+        assertThat(opcionesCorrectas(d)).containsExactly("A", "C");
+    }
+
+    @Test
+    void detalleDeOpcionUnicaMarcaLaOpcionCorrectaSingular() {
+        DetalleEscenario d = detalleEscenario(com.uam.psychoform.instrument.model.TipoRespuesta.OPCION_UNICA);
+        d.opciones.addAll(List.of(opcion(1L, "A", d.item), opcion(2L, "B", d.item)));
+        d.clave.setTextoEsperado("A");
+        d.clave.setOpcionCorrecta(d.opciones.get(1));
+
+        assertThat(opcionesCorrectas(d)).containsExactly("B");
+    }
+
+    private List<String> opcionesCorrectas(DetalleEscenario d) {
+        return service.getDetailedAttemptResult(7L).subtests().getFirst().items().getFirst().options().stream()
+                .filter(ResultQueryService.OptionDetailedResponseView::isCorrect)
+                .map(ResultQueryService.OptionDetailedResponseView::code)
+                .toList();
+    }
+
+    private static com.uam.psychoform.instrument.model.OpcionItem opcion(long id, String code,
+            com.uam.psychoform.instrument.model.Item item) {
+        com.uam.psychoform.instrument.model.OpcionItem option = new com.uam.psychoform.instrument.model.OpcionItem();
+        option.setId(id);
+        option.setItem(item);
+        option.setCodigoOpcion(code);
+        option.setTextoOpcion("Opcion " + code);
+        option.setNumeroOrden((int) id);
+        return option;
+    }
+
     private ResultQueryService.ResponseDetailView detalleDelItem(DetalleEscenario d) {
         return service.getDetailedAttemptResult(7L).subtests().getFirst().items().getFirst().response();
     }

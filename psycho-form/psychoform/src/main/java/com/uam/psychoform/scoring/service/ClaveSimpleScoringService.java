@@ -255,12 +255,7 @@ public class ClaveSimpleScoringService {
         if (keyIds.isEmpty()) {
             return java.util.Collections.emptyMap();
         }
-        Map<Long, Set<Long>> optionIdsByKey = new java.util.HashMap<>();
-        for (Object[] row : claves.findOptionSetRowsByKeyIds(keyIds)) {
-            optionIdsByKey.computeIfAbsent(((Number) row[0]).longValue(), id -> new java.util.HashSet<>())
-                    .add(((Number) row[1]).longValue());
-        }
-        return optionIdsByKey;
+        return ClaveCorrectnessEvaluator.groupOptionSetRows(claves.findOptionSetRowsByKeyIds(keyIds));
     }
 
     private void accumulateDimensionScores(List<Long> selectedOptionIds,
