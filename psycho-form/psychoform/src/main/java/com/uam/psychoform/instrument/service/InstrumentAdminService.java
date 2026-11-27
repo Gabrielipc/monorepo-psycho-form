@@ -466,6 +466,358 @@ public class InstrumentAdminService {
         return range;
     }
 
+    /**
+     * B9: clona en una sola transaccion la configuracion completa de una version (en cualquier estado) a una
+     * {@code VersionTest} BORRADOR nueva del mismo test. Copia subtests, items, opciones, imagenes (filas nuevas sobre
+     * el mismo {@code RecursoMultimedia}), dimensiones, reglas de calificacion, claves (con su conjunto de opciones
+     * correctas), matriz opcion-dimension y baremos con sus rangos. No copia rubricas de evaluacion.
+     * Cualquier excepcion revierte todo: no queda una version parcial.
+     */
+    @Transactional
+    @PreAuthorize(SecurityPermissions.TEST_CREAR)
+    public VersionTest cloneVersion(long sourceVersionId, String versionNumber) {
+        if (versionNumber == null || versionNumber.isBlank()) {
+            throw new IllegalArgumentException("El numero de version es obligatorio");
+        }
+        VersionTest source = versions.findByIdForUpdate(sourceVersionId)
+                .orElseThrow(() -> new EntityNotFoundException("Version no encontrada: " + sourceVersionId));
+        Long duplicates = em.createQuery(
+                "SELECT count(v) FROM VersionTest v WHERE v.test.id = :testId AND v.numeroVersion = :number",
+                Long.class).setParameter("testId", source.getTest().getId())
+                .setParameter("number", versionNumber).getSingleResult();
+        if (duplicates > 0) {
+            throw new IllegalStateException("Ya existe la version " + versionNumber + " en el test");
+        }
+        Usuario actor = currentUser();
+        LocalDateTime now = LocalDateTime.now(clock);
+
+        VersionTest copy = new VersionTest();
+        copy.setTest(source.getTest());
+        copy.setEstrategiaCalificacion(source.getEstrategiaCalificacion());
+        copy.setNumeroVersion(versionNumber);
+        copy.setEstado(EstadoVersionTest.BORRADOR);
+        copy.setInstruccionesGenerales(source.getInstruccionesGenerales());
+        copy.setTiempoLimiteSegundos(source.getTiempoLimiteSegundos());
+        copy.setPermiteAleatorizarItems(source.getPermiteAleatorizarItems());
+        copy.setPermiteAleatorizarSubtests(source.getPermiteAleatorizarSubtests());
+        copy.setCreadoPor(actor);
+        copy.setCreadoEn(now);
+        em.persist(copy);
+
+        Map<Long, Subtest> subtestMap = cloneSubtests(source, copy);
+        Map<Long, DimensionResultado> dimensionMap = cloneDimensions(source, copy, subtestMap, now);
+        Map<Long, Item> itemMap = cloneItems(subtestMap);
+        Map<Long, OpcionItem> optionMap = cloneOptions(itemMap);
+        cloneImages(itemMap, optionMap);
+        Map<Long, ReglaCalificacion> ruleMap = cloneRules(source, copy, subtestMap, itemMap, actor, now);
+        cloneAnswerKeys(source, ruleMap, itemMap, optionMap, actor, now);
+        cloneOptionDimensionScores(ruleMap, optionMap, dimensionMap, now);
+        cloneBaremos(source, copy, dimensionMap, actor, now);
+        em.flush();
+        return copy;
+    }
+
+    private Map<Long, Subtest> cloneSubtests(VersionTest source, VersionTest copy) {
+        List<Subtest> originals = em.createQuery(
+                "SELECT s FROM Subtest s WHERE s.versionTest.id = :versionId ORDER BY s.numeroOrden ASC, s.id ASC",
+                Subtest.class).setParameter("versionId", source.getId()).getResultList();
+        Map<Long, Subtest> map = new LinkedHashMap<>();
+        for (Subtest original : originals) {
+            Subtest clone = new Subtest();
+            clone.setVersionTest(copy);
+            clone.setEstrategiaCalificacion(original.getEstrategiaCalificacion());
+            clone.setCodigoSubtest(original.getCodigoSubtest());
+            clone.setNombreSubtest(original.getNombreSubtest());
+            clone.setDescripcion(original.getDescripcion());
+            clone.setInstrucciones(original.getInstrucciones());
+            clone.setNumeroOrden(original.getNumeroOrden());
+            clone.setTiempoLimiteSegundos(original.getTiempoLimiteSegundos());
+            clone.setPermiteAleatorizarItems(original.getPermiteAleatorizarItems());
+            clone.setPermiteAleatorizarOpciones(original.getPermiteAleatorizarOpciones());
+            clone.setEsObligatorio(original.getEsObligatorio());
+            clone.setEstado(original.getEstado());
+            em.persist(clone);
+            map.put(original.getId(), clone);
+        }
+        return map;
+    }
+
+    private Map<Long, DimensionResultado> cloneDimensions(VersionTest source, VersionTest copy,
+            Map<Long, Subtest> subtestMap, LocalDateTime now) {
+        List<DimensionResultado> originals = em.createQuery(
+                "SELECT d FROM DimensionResultado d WHERE d.versionTest.id = :versionId ORDER BY d.id ASC",
+                DimensionResultado.class).setParameter("versionId", source.getId()).getResultList();
+        Map<Long, DimensionResultado> map = new LinkedHashMap<>();
+        for (DimensionResultado original : originals) {
+            DimensionResultado clone = new DimensionResultado();
+            clone.setVersionTest(copy);
+            clone.setSubtest(original.getSubtest() == null ? null : subtestMap.get(original.getSubtest().getId()));
+            clone.setCodigoDimension(original.getCodigoDimension());
+            clone.setNombreDimension(original.getNombreDimension());
+            clone.setDescripcion(original.getDescripcion());
+            clone.setOrdenPresentacion(original.getOrdenPresentacion());
+            clone.setPuntajeMinimo(original.getPuntajeMinimo());
+            clone.setPuntajeMaximo(original.getPuntajeMaximo());
+            clone.setActiva(original.getActiva());
+            clone.setCreadoEn(now);
+            em.persist(clone);
+            map.put(original.getId(), clone);
+        }
+        return map;
+    }
+
+    private Map<Long, Item> cloneItems(Map<Long, Subtest> subtestMap) {
+        if (subtestMap.isEmpty()) {
+            return Map.of();
+        }
+        List<Item> originals = em.createQuery("""
+                SELECT i FROM Item i
+                WHERE i.subtest.id IN :subtestIds
+                ORDER BY i.subtest.id ASC, i.numeroOrden ASC
+                """, Item.class).setParameter("subtestIds", List.copyOf(subtestMap.keySet())).getResultList();
+        Map<Long, Item> map = new LinkedHashMap<>();
+        for (Item original : originals) {
+            Item clone = new Item();
+            clone.setSubtest(subtestMap.get(original.getSubtest().getId()));
+            clone.setCodigoItem(original.getCodigoItem());
+            clone.setTipoItem(original.getTipoItem());
+            clone.setTipoRespuesta(original.getTipoRespuesta());
+            clone.setEnunciado(original.getEnunciado());
+            clone.setInstruccion(original.getInstruccion());
+            clone.setNumeroOrden(original.getNumeroOrden());
+            clone.setPuntajeBase(original.getPuntajeBase());
+            clone.setTiempoLimiteSegundos(original.getTiempoLimiteSegundos());
+            clone.setEsObligatorio(original.getEsObligatorio());
+            clone.setEsConfidencial(original.getEsConfidencial());
+            clone.setEstado(original.getEstado());
+            em.persist(clone);
+            map.put(original.getId(), clone);
+        }
+        return map;
+    }
+
+    private Map<Long, OpcionItem> cloneOptions(Map<Long, Item> itemMap) {
+        Map<Long, List<OpcionItem>> originalsByItem = optionsByItem(List.copyOf(itemMap.keySet()));
+        Map<Long, OpcionItem> map = new LinkedHashMap<>();
+        for (List<OpcionItem> originals : originalsByItem.values()) {
+            for (OpcionItem original : originals) {
+                OpcionItem clone = new OpcionItem();
+                clone.setItem(itemMap.get(original.getItem().getId()));
+                clone.setCodigoOpcion(original.getCodigoOpcion());
+                clone.setTextoOpcion(original.getTextoOpcion());
+                clone.setNumeroOrden(original.getNumeroOrden());
+                clone.setValorOrdinal(original.getValorOrdinal());
+                clone.setEstado(original.getEstado());
+                em.persist(clone);
+                map.put(original.getId(), clone);
+            }
+        }
+        return map;
+    }
+
+    private void cloneImages(Map<Long, Item> itemMap, Map<Long, OpcionItem> optionMap) {
+        if (!itemMap.isEmpty()) {
+            List<ImagenItem> originals = em.createQuery("""
+                    SELECT img FROM ImagenItem img JOIN FETCH img.recurso
+                    WHERE img.item.id IN :itemIds
+                    ORDER BY img.item.id ASC, img.numeroOrden ASC
+                    """, ImagenItem.class).setParameter("itemIds", List.copyOf(itemMap.keySet())).getResultList();
+            for (ImagenItem original : originals) {
+                ImagenItem clone = new ImagenItem();
+                clone.setItem(itemMap.get(original.getItem().getId()));
+                clone.setRecurso(original.getRecurso());
+                clone.setRolImagen(original.getRolImagen());
+                clone.setNumeroOrden(original.getNumeroOrden());
+                clone.setTextoAlternativo(original.getTextoAlternativo());
+                em.persist(clone);
+            }
+        }
+        if (!optionMap.isEmpty()) {
+            List<ImagenOpcion> originals = em.createQuery("""
+                    SELECT img FROM ImagenOpcion img JOIN FETCH img.recurso
+                    WHERE img.opcion.id IN :optionIds
+                    ORDER BY img.opcion.id ASC, img.numeroOrden ASC
+                    """, ImagenOpcion.class).setParameter("optionIds", List.copyOf(optionMap.keySet()))
+                    .getResultList();
+            for (ImagenOpcion original : originals) {
+                ImagenOpcion clone = new ImagenOpcion();
+                clone.setOpcion(optionMap.get(original.getOpcion().getId()));
+                clone.setRecurso(original.getRecurso());
+                clone.setNumeroOrden(original.getNumeroOrden());
+                clone.setTextoAlternativo(original.getTextoAlternativo());
+                em.persist(clone);
+            }
+        }
+    }
+
+    private Map<Long, ReglaCalificacion> cloneRules(VersionTest source, VersionTest copy,
+            Map<Long, Subtest> subtestMap, Map<Long, Item> itemMap, Usuario actor, LocalDateTime now) {
+        List<ReglaCalificacion> originals = em.createQuery(
+                "SELECT r FROM ReglaCalificacion r WHERE r.versionTest.id = :versionId ORDER BY r.id ASC",
+                ReglaCalificacion.class).setParameter("versionId", source.getId()).getResultList();
+        Map<Long, ReglaCalificacion> map = new LinkedHashMap<>();
+        for (ReglaCalificacion original : originals) {
+            ReglaCalificacion clone = new ReglaCalificacion();
+            clone.setVersionTest(copy);
+            clone.setSubtest(original.getSubtest() == null ? null : subtestMap.get(original.getSubtest().getId()));
+            clone.setItem(original.getItem() == null ? null : itemMap.get(original.getItem().getId()));
+            clone.setEstrategiaCalificacion(original.getEstrategiaCalificacion());
+            clone.setTipoRegla(original.getTipoRegla());
+            clone.setPrioridad(original.getPrioridad());
+            clone.setActiva(original.getActiva());
+            clone.setEstado(EstadoConfiguracion.BORRADOR);
+            clone.setParametros(original.getParametros());
+            clone.setObservacion(original.getObservacion());
+            clone.setCreadoPor(actor);
+            clone.setCreadoEn(now);
+            em.persist(clone);
+            map.put(original.getId(), clone);
+        }
+        return map;
+    }
+
+    /**
+     * Las claves se copian con SQL nativo porque {@code usa_conjunto_opciones} y {@code clave_respuesta_opcion}
+     * (conjunto exacto de opciones correctas de items OPCION_MULTIPLE) no estan mapeados en {@link ClaveRespuesta}.
+     */
+    @SuppressWarnings("unchecked")
+    private void cloneAnswerKeys(VersionTest source, Map<Long, ReglaCalificacion> ruleMap, Map<Long, Item> itemMap,
+            Map<Long, OpcionItem> optionMap, Usuario actor, LocalDateTime now) {
+        em.flush();
+        List<Object[]> keys = em.createNativeQuery("""
+                SELECT c.clave_respuesta_id, c.regla_calificacion_id, c.item_id, c.opcion_correcta_id,
+                       c.texto_esperado, c.valor_numerico_esperado, c.tolerancia_numerica, c.puntaje,
+                       c.requiere_revision_manual, c.usa_conjunto_opciones
+                FROM clave_respuesta c
+                JOIN regla_calificacion r ON r.regla_calificacion_id = c.regla_calificacion_id
+                WHERE r.version_test_id = :versionId
+                ORDER BY c.clave_respuesta_id
+                """).setParameter("versionId", source.getId()).getResultList();
+        if (keys.isEmpty()) {
+            return;
+        }
+        Map<Long, List<Long>> optionSetByKey = new HashMap<>();
+        List<Long> setKeyIds = keys.stream().filter(row -> Boolean.TRUE.equals(row[9]))
+                .map(row -> ((Number) row[0]).longValue()).toList();
+        if (!setKeyIds.isEmpty()) {
+            List<Object[]> rows = em.createNativeQuery("""
+                    SELECT clave_respuesta_id, opcion_id FROM clave_respuesta_opcion
+                    WHERE clave_respuesta_id IN (:keyIds) ORDER BY clave_respuesta_id, opcion_id
+                    """).setParameter("keyIds", setKeyIds).getResultList();
+            for (Object[] row : rows) {
+                optionSetByKey.computeIfAbsent(((Number) row[0]).longValue(), ignored -> new ArrayList<>())
+                        .add(((Number) row[1]).longValue());
+            }
+        }
+        for (Object[] row : keys) {
+            long keyId = ((Number) row[0]).longValue();
+            ReglaCalificacion rule = ruleMap.get(((Number) row[1]).longValue());
+            Item item = itemMap.get(((Number) row[2]).longValue());
+            OpcionItem correct = row[3] == null ? null : optionMap.get(((Number) row[3]).longValue());
+            Number newKeyId = (Number) em.createNativeQuery("""
+                    INSERT INTO clave_respuesta (regla_calificacion_id, item_id, opcion_correcta_id, texto_esperado,
+                        valor_numerico_esperado, tolerancia_numerica, puntaje, requiere_revision_manual,
+                        usa_conjunto_opciones, creado_por, creado_en)
+                    VALUES (:ruleId, :itemId, :correctId, :expectedText, :expectedNumber, :tolerance, :score,
+                        :manual, :usesSet, :actorId, :createdAt)
+                    RETURNING clave_respuesta_id
+                    """)
+                    .setParameter("ruleId", rule.getId())
+                    .setParameter("itemId", item.getId())
+                    .setParameter("correctId", correct == null ? null : correct.getId())
+                    .setParameter("expectedText", row[4])
+                    .setParameter("expectedNumber", row[5])
+                    .setParameter("tolerance", row[6])
+                    .setParameter("score", row[7])
+                    .setParameter("manual", row[8])
+                    .setParameter("usesSet", row[9])
+                    .setParameter("actorId", actor.getId())
+                    .setParameter("createdAt", now)
+                    .getSingleResult();
+            for (Long optionId : optionSetByKey.getOrDefault(keyId, List.of())) {
+                em.createNativeQuery("""
+                        INSERT INTO clave_respuesta_opcion (clave_respuesta_id, item_id, opcion_id)
+                        VALUES (:keyId, :itemId, :optionId)
+                        """)
+                        .setParameter("keyId", newKeyId.longValue())
+                        .setParameter("itemId", item.getId())
+                        .setParameter("optionId", optionMap.get(optionId).getId())
+                        .executeUpdate();
+            }
+        }
+    }
+
+    private void cloneOptionDimensionScores(Map<Long, ReglaCalificacion> ruleMap, Map<Long, OpcionItem> optionMap,
+            Map<Long, DimensionResultado> dimensionMap, LocalDateTime now) {
+        if (ruleMap.isEmpty()) {
+            return;
+        }
+        List<OpcionPuntajeDimension> originals = em.createQuery("""
+                SELECT p FROM OpcionPuntajeDimension p
+                WHERE p.reglaCalificacion.id IN :ruleIds
+                ORDER BY p.id ASC
+                """, OpcionPuntajeDimension.class).setParameter("ruleIds", List.copyOf(ruleMap.keySet()))
+                .getResultList();
+        for (OpcionPuntajeDimension original : originals) {
+            OpcionPuntajeDimension clone = new OpcionPuntajeDimension();
+            clone.setReglaCalificacion(ruleMap.get(original.getReglaCalificacion().getId()));
+            clone.setOpcion(optionMap.get(original.getOpcion().getId()));
+            clone.setDimensionResultado(dimensionMap.get(original.getDimensionResultado().getId()));
+            clone.setPuntaje(original.getPuntaje());
+            clone.setPeso(original.getPeso());
+            clone.setActiva(original.getActiva());
+            clone.setCreadoEn(now);
+            em.persist(clone);
+        }
+    }
+
+    private void cloneBaremos(VersionTest source, VersionTest copy, Map<Long, DimensionResultado> dimensionMap,
+            Usuario actor, LocalDateTime now) {
+        List<Baremo> originals = em.createQuery(
+                "SELECT b FROM Baremo b WHERE b.versionTest.id = :versionId ORDER BY b.id ASC", Baremo.class)
+                .setParameter("versionId", source.getId()).getResultList();
+        if (originals.isEmpty()) {
+            return;
+        }
+        Map<Long, Baremo> map = new LinkedHashMap<>();
+        for (Baremo original : originals) {
+            Baremo clone = new Baremo();
+            clone.setVersionTest(copy);
+            clone.setDimensionResultado(original.getDimensionResultado() == null ? null
+                    : dimensionMap.get(original.getDimensionResultado().getId()));
+            clone.setCodigoBaremo(original.getCodigoBaremo());
+            clone.setNombre(original.getNombre());
+            clone.setDescripcion(original.getDescripcion());
+            clone.setGrupoNormativo(original.getGrupoNormativo());
+            clone.setCriterioEdadMinima(original.getCriterioEdadMinima());
+            clone.setCriterioEdadMaxima(original.getCriterioEdadMaxima());
+            clone.setCriterioSexo(original.getCriterioSexo());
+            clone.setCriterioCarrera(original.getCriterioCarrera());
+            clone.setVigenteDesde(original.getVigenteDesde());
+            clone.setVigenteHasta(original.getVigenteHasta());
+            clone.setEstado(EstadoConfiguracion.BORRADOR);
+            clone.setCreadoPor(actor);
+            clone.setCreadoEn(now);
+            em.persist(clone);
+            map.put(original.getId(), clone);
+        }
+        List<RangoBaremo> ranges = em.createQuery(
+                "SELECT r FROM RangoBaremo r WHERE r.baremo.id IN :baremoIds ORDER BY r.baremo.id ASC, r.orden ASC",
+                RangoBaremo.class).setParameter("baremoIds", List.copyOf(map.keySet())).getResultList();
+        for (RangoBaremo original : ranges) {
+            RangoBaremo clone = new RangoBaremo();
+            clone.setBaremo(map.get(original.getBaremo().getId()));
+            clone.setPuntajeMinimo(original.getPuntajeMinimo());
+            clone.setPuntajeMaximo(original.getPuntajeMaximo());
+            clone.setPercentil(original.getPercentil());
+            clone.setCategoria(original.getCategoria());
+            clone.setInterpretacion(original.getInterpretacion());
+            clone.setRecomendacion(original.getRecomendacion());
+            clone.setOrden(original.getOrden());
+            em.persist(clone);
+        }
+    }
+
     private VersionTest requireDraft(long versionId) {
         VersionTest version = versions.findByIdForUpdate(versionId)
                 .orElseThrow(() -> new EntityNotFoundException("Version no encontrada: " + versionId));

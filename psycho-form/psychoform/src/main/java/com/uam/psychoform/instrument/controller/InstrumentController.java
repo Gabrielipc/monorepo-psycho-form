@@ -61,6 +61,12 @@ public class InstrumentController {
         return ApiResponse.ok(EntityView.of(admin.saveConfiguration(id, request)));
     }
 
+    @PostMapping("/test-versions/{id}/clone")
+    @PreAuthorize(SecurityPermissions.TEST_CREAR)
+    public ApiResponse<?> cloneVersion(@PathVariable Long id, @Valid @RequestBody CloneVersionRequest request) {
+        return ApiResponse.ok(EntityView.of(admin.cloneVersion(id, request.versionNumber())));
+    }
+
     @PostMapping("/test-versions/{id}/approve")
     @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
     public ApiResponse<?> approve(@PathVariable Long id) {
