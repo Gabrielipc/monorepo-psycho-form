@@ -447,6 +447,47 @@ class ParticipantRuntimeServiceTest {
         verify(sesionSubtests).countBySesionAplicacionId(10L);
     }
 
+    @Test
+    void getAssignmentsForSessionExponeEstadosCrudosYCorrigeAnuladaConIntentoCompletadoYTokenVencido() {
+        LocalDateTime now = LocalDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC);
+        AsignacionTest anulada = asignacionConParticipante(1L, EstadoAsignacion.ANULADO, now.plusHours(1));
+        AsignacionTest vencida = asignacionConParticipante(2L, EstadoAsignacion.ASIGNADO, now.minusHours(1));
+        AsignacionTest sinIniciar = asignacionConParticipante(3L, EstadoAsignacion.ASIGNADO, now.plusHours(1));
+        IntentoTest completado = new IntentoTest();
+        completado.setId(91L);
+        completado.setEstado(EstadoIntento.COMPLETADO);
+        completado.setAsignacion(anulada);
+        when(asignaciones.findBySesionAplicacionIdWithParticipante(10L))
+                .thenReturn(List.of(anulada, vencida, sinIniciar));
+        when(intentos.findByAsignacionSesionAplicacionIdWithUltimoSubtest(10L)).thenReturn(List.of(completado));
+        when(intentoSubtests.countCompletedByIntentoIds(List.of(91L))).thenReturn(List.of());
+
+        var result = service.getAssignmentsForSession(10L);
+
+        assertThat(result).extracting(r -> r.assignmentId(), r -> r.status(), r -> r.state(),
+                r -> r.assignmentStatus(), r -> r.attemptStatus())
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(1L, "REVOCADO", "completado", "ANULADO", "COMPLETADO"),
+                        org.assertj.core.groups.Tuple.tuple(2L, "VENCIDO", "no-iniciado", "ASIGNADO", null),
+                        org.assertj.core.groups.Tuple.tuple(3L, "GENERADO", "no-iniciado", "ASIGNADO", null));
+        assertThat(result).allSatisfy(row -> {
+            assertThat(row.rejectedAnswersCount()).isZero();
+            assertThat(row.rejectedAnswers()).isEmpty();
+        });
+    }
+
+    private static AsignacionTest asignacionConParticipante(long id, EstadoAsignacion estado,
+            LocalDateTime tokenExpiraEn) {
+        AsignacionTest asignacion = new AsignacionTest();
+        asignacion.setId(id);
+        asignacion.setEstado(estado);
+        asignacion.setParticipante(participante(UUID.randomUUID()));
+        asignacion.getParticipante().setNombres("N" + id);
+        asignacion.getParticipante().setApellidos("A" + id);
+        asignacion.setTokenExpiraEn(tokenExpiraEn);
+        return asignacion;
+    }
+
     private static ParticipantAccessService.ParticipantAccess access(long assignmentId) {
         return new ParticipantAccessService.ParticipantAccess(assignmentId, UUID.randomUUID());
     }

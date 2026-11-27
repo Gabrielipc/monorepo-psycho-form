@@ -215,6 +215,35 @@ class SessionMonitorIntegrationTest {
                         .value(1006));
     }
 
+    // ---- B11 ----
+
+    @Test
+    void asignacionesIncluyenEstadosCrudosYEstadosCoherentes() throws Exception {
+        // A: anulada con intento COMPLETADO. B: token vencido sin intento (sigue ASIGNADO en BD).
+        long attemptA = id("insert into intento_test (asignacion_id, estado, iniciado_en, finalizado_en) "
+                + "values (?, 'COMPLETADO', now() at time zone 'utc', now() at time zone 'utc') returning intento_id",
+                assignmentA);
+        jdbc.update("update asignacion_test set estado = 'ANULADO' where asignacion_id = ?", assignmentA);
+        jdbc.update("update asignacion_test set token_expira_en = ? where asignacion_id = ?",
+                Timestamp.valueOf(LocalDateTime.now().minusHours(2)), assignmentB);
+
+        mvc.perform(get("/sesiones/{id}/asignaciones", sessionId).header("Authorization", bearer("SESION_LEER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentA + ")].attemptId").value((int) attemptA))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentA + ")].status").value("REVOCADO"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentA + ")].state").value("completado"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentA + ")].assignmentStatus")
+                        .value("ANULADO"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentA + ")].attemptStatus")
+                        .value("COMPLETADO"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentB + ")].status").value("VENCIDO"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentB + ")].state").value("no-iniciado"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentB + ")].assignmentStatus")
+                        .value("ASIGNADO"))
+                .andExpect(jsonPath("$.data[?(@.assignmentId==" + assignmentB + ")].attemptStatus").value(
+                        org.hamcrest.Matchers.contains((Object) null)));
+    }
+
     // ---- helpers ----
 
     private long startedAttempt(long assignmentId) {

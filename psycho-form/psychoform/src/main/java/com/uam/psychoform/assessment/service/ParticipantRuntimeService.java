@@ -439,28 +439,16 @@ public class ParticipantRuntimeService {
                         .collect(Collectors.toMap(CompletedSubtestCount::getIntentoId,
                                 CompletedSubtestCount::getCompletedCount));
         Map<Long, RejectedSummary> rejectedByAttempt = rejectedAnswersByAttempt(sessionId);
+        LocalDateTime now = LocalDateTime.now(clock);
         return list.stream().map(asg -> {
             IntentoTest attempt = attemptsByAssignment.get(asg.getId());
-            String state = "no-iniciado";
-            String status = "GENERADO";
+            AssignmentStatusMapper.Mapped mapped = AssignmentStatusMapper.map(asg.getEstado(),
+                    asg.getTokenExpiraEn(), attempt == null ? null : attempt.getEstado(), now);
             String currentSubtestId = "—";
             int progress = 0;
             String lastActivity = "Nunca";
 
             if (attempt != null) {
-                state = attempt.getEstado().name().toLowerCase();
-                if ("en_progreso".equals(state)) {
-                    state = "en-progreso";
-                }
-                
-                if (attempt.getEstado() == EstadoIntento.EN_PROGRESO || attempt.getEstado() == EstadoIntento.INTERRUMPIDO) {
-                    status = "ACTIVO";
-                } else if (attempt.getEstado() == EstadoIntento.COMPLETADO) {
-                    status = "VENCIDO";
-                } else if (attempt.getEstado() == EstadoIntento.ANULADO) {
-                    status = "REVOCADO";
-                }
-
                 if (attempt.getUltimoSubtest() != null) {
                     currentSubtestId = attempt.getUltimoSubtest().getCodigoSubtest();
                 }
@@ -480,13 +468,6 @@ public class ParticipantRuntimeService {
                 if (attempt.getUltimaActividadEn() != null) {
                     lastActivity = attempt.getUltimaActividadEn().toString();
                 }
-            } else {
-                if (asg.getEstado() == EstadoAsignacion.EXPIRADO) {
-                    status = "VENCIDO";
-                } else if (asg.getEstado() == EstadoAsignacion.ANULADO) {
-                    status = "REVOCADO";
-                    state = "anulado";
-                }
             }
 
             RejectedSummary rejected = attempt == null
@@ -498,12 +479,14 @@ public class ParticipantRuntimeService {
                 asg.getParticipante().getId(),
                 asg.getParticipante().getNombres() + " " + asg.getParticipante().getApellidos(),
                 asg.getParticipante().getCodigoParticipante(),
-                status,
-                state,
+                mapped.status(),
+                mapped.state(),
                 currentSubtestId,
                 progress,
                 lastActivity,
                 asg.getTokenExpiraEn().toString(),
+                asg.getEstado().name(),
+                attempt == null ? null : attempt.getEstado().name(),
                 rejected.count(),
                 rejected.recent()
             );

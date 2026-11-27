@@ -16,6 +16,8 @@ public record SessionAssignmentDto(
     Integer overallProgress,
     String lastActivity,
     String tokenExpiraEn,
+    String assignmentStatus,                // B11: EstadoAsignacion.name() crudo del backend
+    String attemptStatus,                   // B11: EstadoIntento.name() crudo, o null si no hay intento
     Integer rejectedAnswersCount,           // B17: filas distintas de respuesta_rechazada del intento
     List<RejectedAnswerDto> rejectedAnswers // B17: como maximo 20, las mas recientes primero
 ) {
