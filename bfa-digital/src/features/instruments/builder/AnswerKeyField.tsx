@@ -24,11 +24,12 @@ export interface AnswerKeyFieldProps {
   canEdit: boolean;
   canConfigureScoring: boolean;
   problems?: readonly DocumentProblem[];
+  embedded?: boolean;
   onDispatch: (action: DocumentAction) => void;
 }
 
 /**
- * Editor de clave de respuesta adaptado al tipo de respuesta del ítem y
+ * Editor minimalista de clave de respuesta adaptado al tipo de respuesta del ítem y
  * sujeto al permiso `CALIFICACION_CONFIGURAR` cuando el subtest no tiene regla previa.
  */
 export function AnswerKeyField({
@@ -39,6 +40,7 @@ export function AnswerKeyField({
   canEdit,
   canConfigureScoring,
   problems = [],
+  embedded = false,
   onDispatch,
 }: AnswerKeyFieldProps) {
   const fieldId = useId();
@@ -79,26 +81,68 @@ export function AnswerKeyField({
   const scoreValue = activeKey ? activeKey.score : item.baseScore;
   const manualReviewChecked = activeKey?.requiresManualReview ?? false;
 
+  const scoreInput = (
+    <div className="space-y-1">
+      <Label htmlFor={scoreInputId} className="text-xs font-medium text-muted-foreground">
+        Puntaje de clave
+      </Label>
+      <Input
+        id={scoreInputId}
+        type="number"
+        min={0}
+        step="any"
+        value={scoreValue}
+        disabled={!canEditKey}
+        className="h-8 text-sm tabular-nums"
+        onChange={(event) => {
+          const raw = event.target.value.trim();
+          if (raw === "") return;
+          const parsed = Number(raw);
+          if (Number.isFinite(parsed) && parsed >= 0) {
+            updateAnswerKey({ score: parsed });
+          }
+        }}
+      />
+    </div>
+  );
+
+  const manualReviewSwitch = (
+    <div className="flex items-center gap-2 pt-4">
+      <Switch
+        id={manualReviewId}
+        checked={manualReviewChecked}
+        disabled={!canEditKey}
+        onCheckedChange={(checked) => updateAnswerKey({ requiresManualReview: checked })}
+      />
+      <Label htmlFor={manualReviewId} className="cursor-pointer text-xs font-medium text-foreground">
+        Requiere revisión manual
+      </Label>
+    </div>
+  );
+
   return (
     <section
       aria-labelledby={`${fieldId}-heading`}
-      className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-xs)]"
+      className={cn(
+        "space-y-3",
+        !embedded && "rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-xs)]",
+      )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 id={`${fieldId}-heading`} className="text-sm font-semibold text-foreground">
-            Clave de respuesta
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            Configura el criterio de calificación automática o revisión manual para este ítem.
-          </p>
-        </div>
+      <div className="flex items-center justify-between gap-2">
+        <h3
+          id={`${fieldId}-heading`}
+          className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+        >
+          Clave de respuesta
+        </h3>
 
         {SINGLE_KEY_OPTION_RESPONSE_TYPES.has(item.responseType) && (
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            variant="ghost"
+            size="icon"
+            aria-label="Quitar clave"
+            title="Quitar clave"
             disabled={clearKeyDisabled}
             onClick={() =>
               onDispatch({
@@ -107,10 +151,9 @@ export function AnswerKeyField({
                 itemDraftId: item.draftId,
               })
             }
-            className="gap-1.5"
+            className="size-7 text-muted-foreground hover:bg-status-danger-bg hover:text-status-danger-fg"
           >
             <Trash2 className="size-3.5" aria-hidden="true" />
-            <span>Quitar clave</span>
           </Button>
         )}
       </div>
@@ -127,7 +170,7 @@ export function AnswerKeyField({
       )}
 
       {keyProblems.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {keyProblems.map((problem) => {
             const isError = problem.severity === "error";
             return (
@@ -159,27 +202,35 @@ export function AnswerKeyField({
       )}
 
       {SINGLE_KEY_OPTION_RESPONSE_TYPES.has(item.responseType) && (
-        <div className="space-y-2">
-          <div
-            className={cn(
-              "flex items-center gap-2 rounded-md border px-3 py-2 text-sm",
-              selectedSingleOption
-                ? "border-status-success-border bg-status-success-bg/40 text-status-success-fg"
-                : "border-border bg-muted/40 text-muted-foreground",
-            )}
-          >
-            {selectedSingleOption ? (
-              <>
-                <CheckCircle2 className="size-4 shrink-0" aria-hidden="true" />
-                <span>
-                  Opción correcta:{" "}
-                  <strong className="font-mono">{selectedSingleOption.code}</strong>
-                  {selectedSingleOption.text ? ` — ${selectedSingleOption.text}` : ""}
-                </span>
-              </>
-            ) : (
-              <span>Sin opción correcta asignada</span>
-            )}
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-12">
+            <div className="space-y-1 sm:col-span-5">
+              <span className="text-xs font-medium text-muted-foreground">Selección activa</span>
+              <div
+                className={cn(
+                  "flex h-8 items-center gap-2 rounded-md border px-2.5 text-xs",
+                  selectedSingleOption
+                    ? "border-status-success-border bg-status-success-bg/40 text-status-success-fg"
+                    : "border-border bg-muted/40 text-muted-foreground",
+                )}
+              >
+                {selectedSingleOption ? (
+                  <>
+                    <CheckCircle2 className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate">
+                      Opción correcta:{" "}
+                      <strong className="font-mono">{selectedSingleOption.code}</strong>
+                      {selectedSingleOption.text ? ` — ${selectedSingleOption.text}` : ""}
+                    </span>
+                  </>
+                ) : (
+                  <span>Sin opción correcta asignada</span>
+                )}
+              </div>
+            </div>
+
+            <div className="sm:col-span-3">{scoreInput}</div>
+            <div className="sm:col-span-4">{manualReviewSwitch}</div>
           </div>
 
           {isPersistedKey && (
@@ -192,31 +243,33 @@ export function AnswerKeyField({
       )}
 
       {item.responseType === "OPCION_MULTIPLE" && (
-        <div className="space-y-1.5">
-          <Label htmlFor={expectedTextId} className="text-sm font-medium text-foreground">
-            Códigos de opciones correctas
-          </Label>
-          <Input
-            id={expectedTextId}
-            value={activeKey?.expectedText ?? ""}
-            disabled={!canEditKey}
-            placeholder="Ej. A,C"
-            className="font-mono"
-            onChange={(event) => {
-              const value = event.target.value;
-              updateAnswerKey({ expectedText: value === "" ? null : value });
-            }}
-          />
-          <p className="text-xs text-muted-foreground">
-            Separa los códigos esperados con comas (por ejemplo: <code className="font-mono">A,C</code>).
-          </p>
+        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-12">
+          <div className="space-y-1 sm:col-span-5">
+            <Label htmlFor={expectedTextId} className="text-xs font-medium text-muted-foreground">
+              Códigos de opciones correctas
+            </Label>
+            <Input
+              id={expectedTextId}
+              value={activeKey?.expectedText ?? ""}
+              disabled={!canEditKey}
+              placeholder="Ej. A,C"
+              className="h-8 font-mono text-sm"
+              onChange={(event) => {
+                const value = event.target.value;
+                updateAnswerKey({ expectedText: value === "" ? null : value });
+              }}
+            />
+          </div>
+
+          <div className="sm:col-span-3">{scoreInput}</div>
+          <div className="sm:col-span-4">{manualReviewSwitch}</div>
         </div>
       )}
 
       {item.responseType === "NUMERICA" && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor={expectedNumberId} className="text-sm font-medium text-foreground">
+        <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-2 xl:grid-cols-12">
+          <div className="space-y-1 xl:col-span-3">
+            <Label htmlFor={expectedNumberId} className="text-xs font-medium text-muted-foreground">
               Valor numérico esperado
             </Label>
             <Input
@@ -226,7 +279,7 @@ export function AnswerKeyField({
               value={activeKey?.expectedNumber ?? ""}
               disabled={!canEditKey}
               placeholder="Ej. 42"
-              className="tabular-nums"
+              className="h-8 text-sm tabular-nums"
               onChange={(event) => {
                 const raw = event.target.value.trim();
                 if (raw === "") {
@@ -241,8 +294,11 @@ export function AnswerKeyField({
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor={numericToleranceId} className="text-sm font-medium text-foreground">
+          <div className="space-y-1 xl:col-span-3">
+            <Label
+              htmlFor={numericToleranceId}
+              className="text-xs font-medium text-muted-foreground"
+            >
               Tolerancia numérica
             </Label>
             <Input
@@ -253,7 +309,7 @@ export function AnswerKeyField({
               value={activeKey?.numericTolerance ?? ""}
               disabled={!canEditKey}
               placeholder="Ej. 0.5"
-              className="tabular-nums"
+              className="h-8 text-sm tabular-nums"
               onChange={(event) => {
                 const raw = event.target.value.trim();
                 if (raw === "") {
@@ -267,69 +323,37 @@ export function AnswerKeyField({
               }}
             />
           </div>
+
+          <div className="xl:col-span-2">{scoreInput}</div>
+          <div className="xl:col-span-4">{manualReviewSwitch}</div>
         </div>
       )}
 
       {item.responseType === "TEXTO_ABIERTO" && (
-        <div className="space-y-1.5">
-          <Label htmlFor={expectedTextId} className="text-sm font-medium text-foreground">
-            Rúbrica / texto esperado de referencia
-          </Label>
-          <Textarea
-            id={expectedTextId}
-            value={activeKey?.expectedText ?? ""}
-            disabled={!canEditKey}
-            placeholder="Criterios clave o respuesta modelo para el evaluador"
-            rows={3}
-            onChange={(event) => {
-              const value = event.target.value;
-              updateAnswerKey({ expectedText: value === "" ? null : value });
-            }}
-          />
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor={expectedTextId} className="text-xs font-medium text-muted-foreground">
+              Rúbrica / texto esperado de referencia
+            </Label>
+            <Textarea
+              id={expectedTextId}
+              value={activeKey?.expectedText ?? ""}
+              disabled={!canEditKey}
+              placeholder="Criterios clave o respuesta modelo para el evaluador"
+              rows={2}
+              onChange={(event) => {
+                const value = event.target.value;
+                updateAnswerKey({ expectedText: value === "" ? null : value });
+              }}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 items-center gap-3 sm:grid-cols-12">
+            <div className="sm:col-span-4">{scoreInput}</div>
+            <div className="sm:col-span-8">{manualReviewSwitch}</div>
+          </div>
         </div>
       )}
-
-      <div className="grid grid-cols-1 items-center gap-4 pt-1 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor={scoreInputId} className="text-sm font-medium text-foreground">
-            Puntaje de clave
-          </Label>
-          <Input
-            id={scoreInputId}
-            type="number"
-            min={0}
-            step="any"
-            value={scoreValue}
-            disabled={!canEditKey}
-            className="tabular-nums"
-            onChange={(event) => {
-              const raw = event.target.value.trim();
-              if (raw === "") return;
-              const parsed = Number(raw);
-              if (Number.isFinite(parsed) && parsed >= 0) {
-                updateAnswerKey({ score: parsed });
-              }
-            }}
-          />
-        </div>
-
-        <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2.5 sm:mt-5">
-          <div className="space-y-0.5">
-            <Label htmlFor={manualReviewId} className="text-sm font-medium text-foreground">
-              Requiere revisión manual
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              El evaluador asignará el puntaje manualmente.
-            </p>
-          </div>
-          <Switch
-            id={manualReviewId}
-            checked={manualReviewChecked}
-            disabled={!canEditKey}
-            onCheckedChange={(checked) => updateAnswerKey({ requiresManualReview: checked })}
-          />
-        </div>
-      </div>
     </section>
   );
 }

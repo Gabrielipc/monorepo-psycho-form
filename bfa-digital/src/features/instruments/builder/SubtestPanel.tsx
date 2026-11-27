@@ -16,7 +16,6 @@ import { Button, buttonVariants } from "../../../app/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "../../../app/components/ui/card";
@@ -225,51 +224,46 @@ export function SubtestPanel({
   const deleteDescription = `Se eliminará el subtest "${subtest.name || subtest.code}" y sus ${activeItems.length} ítems activos del borrador actual.`;
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+    <div className="flex w-full flex-col gap-3">
       <Card className="border-border bg-card shadow-[var(--shadow-xs)]">
-        <CardHeader className="border-b border-border pb-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-xs font-medium text-muted-foreground">
-                  {subtest.code || "SIN-CODIGO"}
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  Orden #{subtest.order}
-                </span>
-              </div>
-              <CardTitle className="text-base font-semibold text-foreground">
-                {subtest.name || "Subtest sin nombre"}
-              </CardTitle>
-              <CardDescription className="text-xs text-muted-foreground">
-                Configuración, aleatorización y resumen de ítems del subtest.
-              </CardDescription>
-            </div>
-
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={!isEditable}
-              onClick={() => setConfirmDeleteOpen(true)}
-            >
-              <Trash2 className="size-4" aria-hidden="true" />
-              <span>Eliminar subtest</span>
-            </Button>
+        <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-border px-5 py-3">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <CardTitle className="truncate text-sm font-semibold text-foreground">
+              {subtest.name || "Subtest sin nombre"}
+            </CardTitle>
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {subtest.code || "SIN-CODIGO"}
+            </span>
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              #{subtest.order}
+            </span>
           </div>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 text-muted-foreground hover:bg-status-danger-bg hover:text-status-danger-fg"
+            aria-label="Eliminar subtest"
+            title="Eliminar subtest"
+            disabled={!isEditable}
+            onClick={() => setConfirmDeleteOpen(true)}
+          >
+            <Trash2 className="size-4" aria-hidden="true" />
+          </Button>
         </CardHeader>
 
-        <CardContent className="flex flex-col gap-6 pt-6">
+        <CardContent className="flex flex-col gap-4 p-5">
           {problemsByField.other.length > 0 && (
-            <div className="rounded-lg border border-status-danger-border bg-status-danger-bg/60 p-3">
+            <div className="rounded-md border border-status-danger-border bg-status-danger-bg/60 p-2.5">
               <FieldMessages problems={problemsByField.other} />
             </div>
           )}
 
-          {/* Código, nombre y tiempo límite */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={codeId}>
+          {/* Fila 1: Código, nombre, tiempo límite y estrategia */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-12">
+            <div className="flex flex-col gap-1 xl:col-span-2">
+              <Label htmlFor={codeId} className="text-xs font-medium text-muted-foreground">
                 <span>Código</span>
                 <span className="text-status-danger-fg" aria-hidden="true">
                   *
@@ -281,14 +275,14 @@ export function SubtestPanel({
                 value={subtest.code}
                 disabled={!isEditable}
                 aria-invalid={hasError("code")}
-                className="font-mono"
+                className="h-8 font-mono text-sm"
                 onChange={(event) => updateSubtest({ code: event.target.value })}
               />
               <FieldMessages problems={problemsByField.code} />
             </div>
 
-            <div className="flex flex-col gap-1.5 md:col-span-2">
-              <Label htmlFor={nameId}>
+            <div className="flex flex-col gap-1 xl:col-span-4">
+              <Label htmlFor={nameId} className="text-xs font-medium text-muted-foreground">
                 <span>Nombre del subtest</span>
                 <span className="text-status-danger-fg" aria-hidden="true">
                   *
@@ -300,22 +294,24 @@ export function SubtestPanel({
                 value={subtest.name}
                 disabled={!isEditable}
                 aria-invalid={hasError("name")}
+                className="h-8 text-sm"
                 onChange={(event) => updateSubtest({ name: event.target.value })}
               />
               <FieldMessages problems={problemsByField.name} />
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={timeLimitId}>Tiempo límite (segundos)</Label>
+            <div className="flex flex-col gap-1 xl:col-span-3">
+              <Label htmlFor={timeLimitId} className="text-xs font-medium text-muted-foreground">
+                Tiempo límite (segundos)
+              </Label>
               <Input
                 id={timeLimitId}
                 type="number"
                 value={subtest.timeLimitSeconds === null ? "" : String(subtest.timeLimitSeconds)}
                 disabled={!isEditable}
                 aria-invalid={hasError("timeLimitSeconds")}
-                placeholder="Sin límite específico"
+                placeholder="Sin límite"
+                className="h-8 text-sm tabular-nums"
                 onChange={(event) => {
                   const raw = event.target.value.trim();
                   if (raw === "") {
@@ -329,22 +325,22 @@ export function SubtestPanel({
               <FieldMessages problems={problemsByField.timeLimitSeconds} />
             </div>
 
-            {/* Estrategia del subtest */}
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor={strategySelectId}>Estrategia de calificación</Label>
+            <div className="flex flex-col gap-1 xl:col-span-3">
+              <Label htmlFor={strategySelectId} className="text-xs font-medium text-muted-foreground">
+                Estrategia de calificación
+              </Label>
               {!canConfigureScoring ? (
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-1">
                   <div
                     aria-readonly="true"
                     data-testid="subtest-strategy-readonly"
-                    className="flex h-9 items-center justify-between rounded-md border border-border bg-muted px-3 text-sm text-foreground"
+                    className="flex h-8 items-center justify-between rounded-md border border-border bg-muted px-2.5 text-xs text-foreground"
                   >
                     <span className="truncate">{readOnlyStrategyLabel}</span>
-                    <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <Lock className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
                   </div>
                   <p className="text-xs text-status-warning-fg">
-                    Requiere permiso <span className="font-mono">CALIFICACION_CONFIGURAR</span>{" "}
-                    para modificar la estrategia.
+                    Requiere <span className="font-mono">CALIFICACION_CONFIGURAR</span>.
                   </p>
                 </div>
               ) : (
@@ -358,7 +354,7 @@ export function SubtestPanel({
                     updateSubtest({ strategyId: raw === "" ? null : Number(raw) });
                   }}
                   className={cn(
-                    "border-input bg-input-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+                    "border-input bg-input-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex h-8 w-full rounded-md border px-2.5 py-1 text-xs outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
                     "aria-invalid:border-destructive aria-invalid:ring-destructive/20",
                   )}
                 >
@@ -379,170 +375,100 @@ export function SubtestPanel({
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={descriptionId}>Descripción</Label>
-            <Textarea
-              id={descriptionId}
-              rows={2}
-              value={subtest.description}
-              disabled={!isEditable}
-              aria-invalid={hasError("description")}
-              placeholder="Descripción interna o constructo evaluado..."
-              onChange={(event) => updateSubtest({ description: event.target.value })}
-            />
-            <FieldMessages problems={problemsByField.description} />
+          {/* Fila 2: Descripción e Instrucciones en 2 columnas */}
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={descriptionId} className="text-xs font-medium text-muted-foreground">
+                Descripción
+              </Label>
+              <Textarea
+                id={descriptionId}
+                rows={2}
+                value={subtest.description}
+                disabled={!isEditable}
+                aria-invalid={hasError("description")}
+                placeholder="Descripción interna o constructo..."
+                onChange={(event) => updateSubtest({ description: event.target.value })}
+              />
+              <FieldMessages problems={problemsByField.description} />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={instructionsId} className="text-xs font-medium text-muted-foreground">
+                Instrucciones del subtest
+              </Label>
+              <Textarea
+                id={instructionsId}
+                rows={2}
+                value={subtest.instructions}
+                disabled={!isEditable}
+                aria-invalid={hasError("instructions")}
+                placeholder="Consigna mostrada antes de iniciar..."
+                onChange={(event) => updateSubtest({ instructions: event.target.value })}
+              />
+              <FieldMessages problems={problemsByField.instructions} />
+            </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor={instructionsId}>Instrucciones del subtest</Label>
-            <Textarea
-              id={instructionsId}
-              rows={3}
-              value={subtest.instructions}
-              disabled={!isEditable}
-              aria-invalid={hasError("instructions")}
-              placeholder="Consigna mostrada antes de iniciar este subtest..."
-              onChange={(event) => updateSubtest({ instructions: event.target.value })}
-            />
-            <FieldMessages problems={problemsByField.instructions} />
-          </div>
-
-          {/* Switches de comportamiento */}
-          <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/30 p-4">
-            <h3 className="text-sm font-semibold text-foreground">Reglas de aplicación</h3>
-
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor={requiredId}>Subtest obligatorio</Label>
-                <p className="text-xs text-muted-foreground">
-                  El participante debe completar este subtest para cerrar el intento.
-                </p>
-              </div>
+          {/* Fila 3: Toggles minimalistas en línea */}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-border py-2.5">
+            <div className="flex items-center gap-2">
               <Switch
                 id={requiredId}
                 checked={subtest.required}
                 disabled={!isEditable}
                 onCheckedChange={(checked) => updateSubtest({ required: checked })}
               />
+              <Label htmlFor={requiredId} className="cursor-pointer text-xs font-medium text-foreground">
+                Subtest obligatorio
+              </Label>
             </div>
 
-            <div className="border-t border-border" />
-
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor={randomizeOptionsId}>Aleatorizar opciones</Label>
-                <p className="text-xs text-muted-foreground">
-                  Baraja el orden de las opciones en ítems de selección.
-                </p>
-              </div>
+            <div className="flex items-center gap-2">
               <Switch
                 id={randomizeOptionsId}
                 checked={subtest.randomizeOptions}
                 disabled={!isEditable}
                 onCheckedChange={(checked) => updateSubtest({ randomizeOptions: checked })}
               />
+              <Label
+                htmlFor={randomizeOptionsId}
+                className="cursor-pointer text-xs font-medium text-foreground"
+              >
+                Aleatorizar opciones
+              </Label>
             </div>
 
-            <div className="border-t border-border" />
-
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor={randomizeItemsId}>Aleatorizar ítems del subtest</Label>
-                <p className="text-xs text-muted-foreground">
-                  {versionAllowsRandomizeItems
-                    ? "Presenta los ítems de este subtest en orden aleatorio."
-                    : "Deshabilitado porque la versión no permite aleatorizar ítems."}
-                </p>
-              </div>
+            <div className="flex items-center gap-2">
               <Switch
                 id={randomizeItemsId}
                 checked={versionAllowsRandomizeItems ? subtest.randomizeItems : false}
                 disabled={!isEditable || !versionAllowsRandomizeItems}
                 onCheckedChange={(checked) => updateSubtest({ randomizeItems: checked })}
               />
+              <Label
+                htmlFor={randomizeItemsId}
+                className="cursor-pointer text-xs font-medium text-foreground"
+              >
+                Aleatorizar ítems del subtest
+              </Label>
+              {!versionAllowsRandomizeItems && (
+                <span className="text-xs text-muted-foreground">
+                  (Deshabilitado porque la versión no permite aleatorizar ítems)
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Modo avanzado · Reglas de calificación */}
-          <Collapsible
-            open={advancedOpen}
-            onOpenChange={setAdvancedOpen}
-            className="rounded-lg border border-border bg-card"
-          >
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/40"
-              >
-                <span className="flex items-center gap-2">
-                  {advancedOpen ? (
-                    <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
-                  ) : (
-                    <ChevronRight className="size-4 text-muted-foreground" aria-hidden="true" />
-                  )}
-                  <span>Modo avanzado · Reglas de calificación</span>
-                </span>
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                  {relevantRules.length} reglas
-                </span>
-              </button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="border-t border-border px-4 py-3">
-              <div className="flex flex-col gap-3 text-xs">
-                <div className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2">
-                  <span className="font-medium text-muted-foreground">Regla predeterminada</span>
-                  <span className="font-mono text-foreground">
-                    {subtest.defaultRuleId !== null
-                      ? `#${subtest.defaultRuleId}`
-                      : "Sin regla asignada"}
-                  </span>
-                </div>
-
-                {relevantRules.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    No hay reglas de calificación registradas para este subtest.
-                  </p>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {relevantRules.map((rule) => (
-                      <li
-                        key={rule.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
-                      >
-                        <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-semibold text-foreground">
-                              #{rule.id}
-                            </span>
-                            <span className="font-medium text-foreground">{rule.ruleType}</span>
-                          </div>
-                          {rule.observation && (
-                            <span className="text-muted-foreground">{rule.observation}</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="font-mono text-xs tabular-nums">
-                            Prioridad {rule.priority}
-                          </Badge>
-                          <Badge variant={rule.active ? "secondary" : "outline"} className="text-xs">
-                            {rule.active ? "Activa" : "Inactiva"} · {rule.status}
-                          </Badge>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-
-          {/* Resumen de ítems */}
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* Lista limpia de ítems */}
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-foreground">Ítems del subtest</h3>
-                <span className="rounded bg-muted px-2 py-0.5 font-mono text-xs text-muted-foreground tabular-nums">
-                  {activeItems.length}
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Ítems del subtest
+                </h3>
+                <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                  ({activeItems.length})
                 </span>
               </div>
 
@@ -550,11 +476,12 @@ export function SubtestPanel({
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
+                    aria-label="+ Nuevo ítem"
+                    title="Nuevo ítem"
                     disabled={!isEditable}
-                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                    className={cn(buttonVariants({ variant: "outline", size: "icon" }), "size-7")}
                   >
                     <Plus className="size-4" aria-hidden="true" />
-                    <span>+ Nuevo ítem</span>
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-72">
@@ -582,11 +509,11 @@ export function SubtestPanel({
             <FieldMessages problems={problemsByField.items} />
 
             {activeItems.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
-                Este subtest aún no tiene ítems activos.
+              <div className="rounded-md border border-dashed border-border py-5 text-center text-xs text-muted-foreground">
+                Sin ítems activos. Usa el botón + para añadir el primero.
               </div>
             ) : (
-              <div className="divide-y divide-border rounded-lg border border-border">
+              <div className="divide-y divide-border rounded-md border border-border">
                 {activeItems.map((item) => {
                   const itemKey = nodeKeyOf({
                     kind: "item",
@@ -602,11 +529,11 @@ export function SubtestPanel({
                       key={item.draftId}
                       type="button"
                       onClick={() => onSelectItem(item.draftId)}
-                      className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                      className="flex h-9 w-full items-center justify-between gap-3 px-3 text-left transition-colors hover:bg-muted/50"
                     >
-                      <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex min-w-0 items-center gap-2">
                         <FileText
-                          className="size-4 shrink-0 text-muted-foreground"
+                          className="size-3.5 shrink-0 text-muted-foreground"
                           aria-hidden="true"
                         />
                         <span className="shrink-0 font-mono text-xs font-semibold text-foreground">
@@ -637,6 +564,73 @@ export function SubtestPanel({
               </div>
             )}
           </div>
+
+          {/* Modo avanzado · Reglas de calificación (minimalista) */}
+          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen} className="pt-1">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-1 py-1.5 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                <span className="flex items-center gap-1.5">
+                  {advancedOpen ? (
+                    <ChevronDown className="size-3.5" aria-hidden="true" />
+                  ) : (
+                    <ChevronRight className="size-3.5" aria-hidden="true" />
+                  )}
+                  <span>Modo avanzado · Reglas de calificación</span>
+                </span>
+                <span className="font-mono text-xs tabular-nums">{relevantRules.length}</span>
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2 rounded-md border border-border p-3">
+              <div className="flex flex-col gap-2.5 text-xs">
+                <div className="flex items-center justify-between rounded bg-muted/50 px-2.5 py-1.5">
+                  <span className="font-medium text-muted-foreground">Regla predeterminada</span>
+                  <span className="font-mono text-foreground">
+                    {subtest.defaultRuleId !== null
+                      ? `#${subtest.defaultRuleId}`
+                      : "Sin regla asignada"}
+                  </span>
+                </div>
+
+                {relevantRules.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No hay reglas de calificación registradas para este subtest.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-1.5">
+                    {relevantRules.map((rule) => (
+                      <li
+                        key={rule.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded border border-border px-2.5 py-1.5"
+                      >
+                        <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-semibold text-foreground">
+                              #{rule.id}
+                            </span>
+                            <span className="font-medium text-foreground">{rule.ruleType}</span>
+                          </div>
+                          {rule.observation && (
+                            <span className="text-muted-foreground">{rule.observation}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="outline" className="font-mono text-xs tabular-nums">
+                            Prioridad {rule.priority}
+                          </Badge>
+                          <Badge variant={rule.active ? "secondary" : "outline"} className="text-xs">
+                            {rule.active ? "Activa" : "Inactiva"} · {rule.status}
+                          </Badge>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
         </CardContent>
       </Card>
 

@@ -331,7 +331,7 @@ export function OutlineTree({
     <nav
       aria-label="Estructura de la versión"
       className={cn(
-        "flex h-full flex-col gap-3 overflow-y-auto bg-card p-3 text-card-foreground",
+        "flex h-full flex-col gap-3 overflow-y-auto rounded-lg border border-border bg-card p-3 text-card-foreground shadow-[var(--shadow-xs)]",
         className,
       )}
     >
@@ -361,7 +361,7 @@ export function OutlineTree({
 
       {/* Grupo SUBTESTS */}
       <section aria-label="Subtests" className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-1 px-1">
+        <div className="flex items-center justify-between gap-1 px-0.5">
           <button
             type="button"
             onClick={() => setSubtestsGroupExpanded((prev) => !prev)}
@@ -377,29 +377,31 @@ export function OutlineTree({
             <span className="font-mono text-xs tabular-nums">({activeSubtests.length})</span>
           </button>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             {onOpenReuseSubtest && !readOnly && canEdit && (
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
+                size="icon"
+                aria-label="+ Reutilizar"
+                title="Reutilizar subtest existente"
                 onClick={onOpenReuseSubtest}
-                className="h-7 px-2 text-xs"
+                className="size-6 text-muted-foreground hover:text-foreground"
               >
-                <RotateCcw className="size-3" aria-hidden="true" />
-                <span>+ Reutilizar</span>
+                <RotateCcw className="size-3.5" aria-hidden="true" />
               </Button>
             )}
             <Button
               type="button"
               variant="ghost"
-              size="sm"
+              size="icon"
+              aria-label="+ Nuevo subtest"
+              title="Nuevo subtest"
               disabled={!isEditable}
               onClick={handleAddSubtest}
-              className="h-7 px-2 text-xs"
+              className="size-6 text-muted-foreground hover:text-foreground"
             >
-              <Plus className="size-3" aria-hidden="true" />
-              <span>+ Nuevo subtest</span>
+              <Plus className="size-3.5" aria-hidden="true" />
             </Button>
           </div>
         </div>

@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 
 import { Alert, AlertDescription } from "../../../app/components/ui/alert";
-import { Badge } from "../../../app/components/ui/badge";
 import { Button } from "../../../app/components/ui/button";
 import { Input } from "../../../app/components/ui/input";
 import { Label } from "../../../app/components/ui/label";
@@ -45,8 +44,8 @@ export interface OptionListProps {
 }
 
 /**
- * Lista editable de opciones de respuesta con selección de clave integrada,
- * reordenamiento por DnD HTML5 y botones accesibles, e imágenes por opción.
+ * Lista editable minimalista de opciones de respuesta con selección de clave integrada,
+ * reordenamiento por DnD HTML5 y botones de icono, e imágenes por opción.
  */
 export function OptionList({
   subtestDraftId,
@@ -118,23 +117,26 @@ export function OptionList({
   };
 
   return (
-    <section aria-labelledby={`${listId}-heading`} className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 id={`${listId}-heading`} className="text-sm font-semibold text-foreground">
+    <section aria-labelledby={`${listId}-heading`} className="space-y-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h3
+            id={`${listId}-heading`}
+            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+          >
             Opciones de respuesta
           </h3>
-          <p className="text-xs text-muted-foreground">
-            {isSingleKeyType
-              ? "Edita las opciones y marca la opción correcta directamente en la fila."
-              : "Edita las opciones disponibles y su orden de presentación."}
-          </p>
+          <span className="font-mono text-xs text-muted-foreground tabular-nums">
+            ({activeOptions.length})
+          </span>
         </div>
 
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          size="icon"
+          aria-label="+ Añadir opción"
+          title="Añadir opción"
           disabled={isLocked}
           onClick={() =>
             onDispatch({
@@ -143,10 +145,9 @@ export function OptionList({
               itemDraftId: item.draftId,
             })
           }
-          className="gap-1.5"
+          className="size-7"
         >
           <Plus className="size-4" aria-hidden="true" />
-          <span>+ Añadir opción</span>
         </Button>
       </div>
 
@@ -161,7 +162,7 @@ export function OptionList({
       )}
 
       {optionProblems.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {optionProblems.map((problem) => {
             const isError = problem.severity === "error";
             return (
@@ -193,14 +194,14 @@ export function OptionList({
       )}
 
       {activeOptions.length === 0 ? (
-        <div className="rounded-lg border border-border bg-muted/40 p-4 text-center text-xs text-muted-foreground">
-          Este ítem no tiene opciones activas. Añade al menos 2 opciones.
+        <div className="rounded-md border border-dashed border-border py-4 text-center text-xs text-muted-foreground">
+          Sin opciones activas. Añade al menos 2 opciones.
         </div>
       ) : (
         <div
           role={isSingleKeyType ? "radiogroup" : undefined}
           aria-label={isSingleKeyType ? "Opciones de respuesta" : undefined}
-          className="space-y-3"
+          className="space-y-1.5"
         >
           {activeOptions.map((opt, index) => {
             const correct = isSingleKeyType && isOptionCorrect(opt);
@@ -253,121 +254,76 @@ export function OptionList({
                   setDragOverDraftId(null);
                 }}
                 className={cn(
-                  "rounded-lg border p-3.5 transition-colors shadow-[var(--shadow-xs)]",
+                  "rounded-md border px-2.5 py-2 transition-colors",
                   correct
-                    ? "border-status-success-border bg-status-success-bg/40"
+                    ? "border-status-success-border bg-status-success-bg/35"
                     : "border-border bg-card",
                   isDragging && "opacity-60",
                   isDragOver && "border-primary ring-2 ring-ring/30",
                 )}
               >
-                <div className="flex flex-wrap items-center justify-between gap-2 pb-3">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "inline-flex items-center text-muted-foreground",
-                        !isLocked && "cursor-grab",
-                      )}
-                      aria-hidden="true"
-                    >
-                      <GripVertical className="size-4" />
-                    </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "inline-flex shrink-0 items-center text-muted-foreground",
+                      !isLocked && "cursor-grab",
+                    )}
+                    aria-hidden="true"
+                  >
+                    <GripVertical className="size-3.5" />
+                  </span>
 
-                    {isSingleKeyType && (
-                      <button
-                        type="button"
-                        role="radio"
-                        aria-checked={correct}
-                        aria-label={`Marcar opción ${opt.code} como correcta`}
-                        disabled={!canEditKey}
-                        onClick={() =>
-                          onDispatch({
-                            type: "SET_CORRECT_OPTION",
-                            subtestDraftId,
-                            itemDraftId: item.draftId,
-                            optionDraftId: opt.draftId,
-                          })
-                        }
-                        className={cn(
-                          "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-                          correct
-                            ? "border-status-success-border bg-status-success-bg text-status-success-fg"
-                            : "border-input bg-card text-foreground hover:bg-muted",
-                        )}
-                      >
+                  {isSingleKeyType && (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={correct}
+                      aria-label={`Marcar opción ${opt.code} como correcta`}
+                      title={correct ? "Clave correcta" : "Marcar como correcta"}
+                      disabled={!canEditKey}
+                      onClick={() =>
+                        onDispatch({
+                          type: "SET_CORRECT_OPTION",
+                          subtestDraftId,
+                          itemDraftId: item.draftId,
+                          optionDraftId: opt.draftId,
+                        })
+                      }
+                      className={cn(
+                        "inline-flex size-7 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+                        correct
+                          ? "text-status-success-fg"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {correct ? (
+                        <>
+                          <CheckCircle2 className="size-4" aria-hidden="true" />
+                          <span className="sr-only">Correcta</span>
+                        </>
+                      ) : (
                         <span
                           aria-hidden="true"
-                          className={cn(
-                            "size-3 rounded-full border",
-                            correct
-                              ? "border-status-success-solid bg-status-success-solid"
-                              : "border-border-strong bg-card",
-                          )}
+                          className="size-3.5 rounded-full border border-border-strong bg-background"
                         />
-                        <span>{correct ? "Clave correcta" : "Marcar correcta"}</span>
-                      </button>
-                    )}
+                      )}
+                    </button>
+                  )}
 
-                    {correct && (
-                      <Badge className="border-status-success-border bg-status-success-bg text-status-success-fg">
-                        <CheckCircle2 className="size-3" aria-hidden="true" />
-                        <span>Correcta</span>
-                      </Badge>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Subir opción"
-                      disabled={isLocked || index === 0}
-                      onClick={() => moveOptionToSortedIndex(opt.draftId, index - 1)}
-                      className="size-8"
-                    >
-                      <ArrowUp className="size-4" aria-hidden="true" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      aria-label="Bajar opción"
-                      disabled={isLocked || index === activeOptions.length - 1}
-                      onClick={() => moveOptionToSortedIndex(opt.draftId, index + 1)}
-                      className="size-8"
-                    >
-                      <ArrowDown className="size-4" aria-hidden="true" />
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-label="Eliminar opción"
-                      disabled={isLocked}
-                      onClick={() => handleDeleteOption(opt)}
-                      className="h-8 gap-1 px-2 text-xs text-destructive hover:bg-status-danger-bg hover:text-status-danger-fg"
-                    >
-                      <Trash2 className="size-3.5" aria-hidden="true" />
-                      <span>Eliminar opción</span>
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-12">
-                  <div className="space-y-1 sm:col-span-3">
-                    <Label htmlFor={codeInputId} className="text-xs font-medium text-foreground">
+                  <div className="w-16 shrink-0">
+                    <Label htmlFor={codeInputId} className="sr-only">
                       Código
                     </Label>
                     <Input
                       id={codeInputId}
                       value={opt.code}
                       disabled={isLocked}
+                      placeholder="Cod."
                       aria-invalid={
                         opt.code.trim() === "" ||
                         (codeCounts.get(opt.code.trim().toUpperCase()) ?? 0) > 1
                       }
-                      className="font-mono"
+                      className="h-8 font-mono text-xs"
                       onChange={(event) =>
                         onDispatch({
                           type: "UPDATE_OPTION",
@@ -380,8 +336,8 @@ export function OptionList({
                     />
                   </div>
 
-                  <div className="space-y-1 sm:col-span-6">
-                    <Label htmlFor={textInputId} className="text-xs font-medium text-foreground">
+                  <div className="min-w-[9rem] flex-1">
+                    <Label htmlFor={textInputId} className="sr-only">
                       Texto
                     </Label>
                     <Input
@@ -389,6 +345,7 @@ export function OptionList({
                       value={opt.text}
                       disabled={isLocked}
                       placeholder="Texto visible de la opción"
+                      className="h-8 text-sm"
                       onChange={(event) =>
                         onDispatch({
                           type: "UPDATE_OPTION",
@@ -401,8 +358,8 @@ export function OptionList({
                     />
                   </div>
 
-                  <div className="space-y-1 sm:col-span-3">
-                    <Label htmlFor={ordinalInputId} className="text-xs font-medium text-foreground">
+                  <div className="w-20 shrink-0">
+                    <Label htmlFor={ordinalInputId} className="sr-only">
                       Valor ordinal
                     </Label>
                     <Input
@@ -411,8 +368,8 @@ export function OptionList({
                       step="any"
                       value={opt.ordinalValue ?? ""}
                       disabled={isLocked}
-                      placeholder="Opcional"
-                      className="tabular-nums"
+                      placeholder="Ordinal"
+                      className="h-8 text-xs tabular-nums"
                       onChange={(event) => {
                         const raw = event.target.value.trim();
                         if (raw === "") {
@@ -438,9 +395,32 @@ export function OptionList({
                       }}
                     />
                   </div>
-                </div>
 
-                <div className="mt-3 border-t border-border pt-3">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Subir opción"
+                    title="Subir opción"
+                    disabled={isLocked || index === 0}
+                    onClick={() => moveOptionToSortedIndex(opt.draftId, index - 1)}
+                    className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <ArrowUp className="size-3.5" aria-hidden="true" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Bajar opción"
+                    title="Bajar opción"
+                    disabled={isLocked || index === activeOptions.length - 1}
+                    onClick={() => moveOptionToSortedIndex(opt.draftId, index + 1)}
+                    className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <ArrowDown className="size-3.5" aria-hidden="true" />
+                  </Button>
+
                   <ImageField
                     kind="option"
                     compact
@@ -486,6 +466,19 @@ export function OptionList({
                       });
                     }}
                   />
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Eliminar opción"
+                    title="Eliminar opción"
+                    disabled={isLocked}
+                    onClick={() => handleDeleteOption(opt)}
+                    className="size-7 shrink-0 text-muted-foreground hover:bg-status-danger-bg hover:text-status-danger-fg"
+                  >
+                    <Trash2 className="size-3.5" aria-hidden="true" />
+                  </Button>
                 </div>
               </div>
             );

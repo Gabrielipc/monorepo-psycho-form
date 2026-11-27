@@ -96,6 +96,9 @@ export function NewVersionDialog({ testId, source, versions, onClose, onCreated 
   onCreated: (version: TestVersion, warnings?: string[]) => void;
 }) {
   const [number, setNumber] = useState(versions.length ? "" : "v1.0");
+  const [timeLimitSeconds, setTimeLimitSeconds] = useState("");
+  const [selectedStrategyId, setSelectedStrategyId] = useState<number | null>(null);
+  const [strategyTouched, setStrategyTouched] = useState(false);
   const [copyBaremos, setCopyBaremos] = useState(true);
   const [confirmedSnapshot, setConfirmedSnapshot] = useState<ConfirmedClonePlanSnapshot>();
   const [planChangedNotice, setPlanChangedNotice] = useState<string>();
@@ -108,7 +111,13 @@ export function NewVersionDialog({ testId, source, versions, onClose, onCreated 
   const submitting = useRef(false);
   const duplicate = versions.some((version) => version.number.trim().toUpperCase() === number.trim().toUpperCase());
   const defaultStrategy = strategies.data?.find((strategy) => strategy.active && strategy.strategyType === "CLAVE_SIMPLE");
-  const targetStrategyId = source?.strategyId ?? defaultStrategy?.id ?? null;
+  const resolvedBlankStrategyId = strategyTouched ? selectedStrategyId : (selectedStrategyId ?? defaultStrategy?.id ?? null);
+  const targetStrategyId = source ? (source.strategyId ?? defaultStrategy?.id ?? null) : resolvedBlankStrategyId;
+  const parsedTimeLimit = timeLimitSeconds.trim() === "" ? null : Number.parseInt(timeLimitSeconds.trim(), 10);
+  const invalidTimeLimit =
+    !source &&
+    timeLimitSeconds.trim() !== "" &&
+    (!Number.isFinite(parsedTimeLimit) || (parsedTimeLimit ?? 0) <= 0);
   const clonePlanQueryKey = [...instrumentKeys.clonePlan(source?.id ?? 0), targetStrategyId] as const;
 
   const clonePlan = useQuery({
@@ -165,6 +174,7 @@ export function NewVersionDialog({ testId, source, versions, onClose, onCreated 
   const submitDisabled =
     pending ||
     duplicate ||
+    invalidTimeLimit ||
     !number.trim() ||
     inspectingClone ||
     cloneInspectionFailed ||
@@ -181,7 +191,7 @@ export function NewVersionDialog({ testId, source, versions, onClose, onCreated 
       number: number.trim(),
       strategyId: targetStrategyId,
       instructions: source?.instructions,
-      timeLimitSeconds: source?.timeLimitSeconds,
+      timeLimitSeconds: source ? source.timeLimitSeconds : parsedTimeLimit,
       randomizeItems: source?.randomizeItems ?? false,
       randomizeSubtests: source?.randomizeSubtests ?? false,
     };
@@ -242,11 +252,52 @@ export function NewVersionDialog({ testId, source, versions, onClose, onCreated 
           </DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => void submit(event)}>
-          <label className="grid gap-1 text-sm">
-            Número de versión
-            <Input required autoComplete="off" value={number} disabled={pending} onChange={(event) => setNumber(event.target.value)} />
-          </label>
+          <div className={source ? "space-y-2" : "grid grid-cols-1 gap-3 sm:grid-cols-2"}>
+            <label className="grid gap-1 text-sm">
+              Número de versión
+              <Input required autoComplete="off" value={number} disabled={pending} onChange={(event) => setNumber(event.target.value)} />
+            </label>
+            {!source && (
+              <label className="grid gap-1 text-sm">
+                Tiempo límite global (s)
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder="Sin límite"
+                  value={timeLimitSeconds}
+                  disabled={pending}
+                  onChange={(event) => setTimeLimitSeconds(event.target.value)}
+                />
+              </label>
+            )}
+          </div>
+          {!source && permissions.canConfigureScoring && (
+            <label className="grid gap-1 text-sm">
+              Estrategia de calificación
+              <select
+                value={resolvedBlankStrategyId === null ? "" : String(resolvedBlankStrategyId)}
+                disabled={pending || strategies.isLoading}
+                onChange={(event) => {
+                  setStrategyTouched(true);
+                  const raw = event.target.value;
+                  setSelectedStrategyId(raw === "" ? null : Number(raw));
+                }}
+                className="border-input bg-input-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="">
+                  {strategies.isLoading ? "Cargando estrategias..." : "Seleccionar más tarde"}
+                </option>
+                {(strategies.data ?? []).map((strategy) => (
+                  <option key={strategy.id} value={String(strategy.id)}>
+                    {strategy.name} ({strategy.code})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {duplicate && <p role="alert" className="text-sm text-destructive">Ya existe una versión con ese número.</p>}
+          {invalidTimeLimit && <p role="alert" className="text-sm text-destructive">El tiempo límite debe ser mayor que 0 segundos.</p>}
           {source && permissions.canConfigureBaremos && (
             <label className="flex items-center gap-2 text-sm">
               <input
