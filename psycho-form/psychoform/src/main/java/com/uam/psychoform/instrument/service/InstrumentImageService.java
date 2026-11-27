@@ -39,7 +39,6 @@ import org.springframework.web.multipart.MultipartFile;
 @Service
 public class InstrumentImageService {
     private static final long MAX_IMAGE_BYTES = 25L * 1024L * 1024L;
-    private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 128;
     private static final Set<String> ALLOWED_MIME_TYPES = Set.of("image/png", "image/jpeg", "image/webp");
 
     private final EntityManager em;
@@ -65,7 +64,7 @@ public class InstrumentImageService {
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageResourceUploadResponse uploadLooseResource(MultipartFile file, String altText, String idempotencyKey)
             throws IOException {
-        String uploadKey = normalizeIdempotencyKey(idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.LOOSE, idempotencyKey);
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
@@ -96,7 +95,7 @@ public class InstrumentImageService {
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse uploadItemImage(long itemId, MultipartFile file, Integer order, String altText,
             String role, String idempotencyKey) throws IOException {
-        String uploadKey = normalizeIdempotencyKey(idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.ITEM, idempotencyKey);
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         Item item = find(Item.class, itemId);
@@ -170,7 +169,7 @@ public class InstrumentImageService {
     @PreAuthorize(com.uam.psychoform.security.SecurityPermissions.TEST_CREAR)
     public ImageUploadResponse uploadOptionImage(long optionId, MultipartFile file, Integer order, String altText,
             String idempotencyKey) throws IOException {
-        String uploadKey = normalizeIdempotencyKey(idempotencyKey);
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.OPTION, idempotencyKey);
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         OpcionItem option = find(OpcionItem.class, optionId);
@@ -216,7 +215,7 @@ public class InstrumentImageService {
             throw new EntityNotFoundException("Imagen de item no encontrada: " + imageId);
         }
         requireDraft(image.getItem().getSubtest().getVersionTest().getId());
-        return replaceItemImage(image, itemId, file, altText, role, normalizeIdempotencyKey(idempotencyKey));
+        return replaceItemImage(image, itemId, file, altText, role, idempotencyKey);
     }
 
     @Transactional
@@ -233,7 +232,7 @@ public class InstrumentImageService {
         Item item = find(Item.class, itemId);
         requireDraft(item.getSubtest().getVersionTest().getId());
         ImagenItem image = findItemImageByOrder(itemId, order);
-        return replaceItemImage(image, itemId, file, altText, role, normalizeIdempotencyKey(idempotencyKey));
+        return replaceItemImage(image, itemId, file, altText, role, idempotencyKey);
     }
 
     @Transactional
@@ -252,7 +251,7 @@ public class InstrumentImageService {
             throw new EntityNotFoundException("Imagen de opcion no encontrada: " + imageId);
         }
         requireDraft(image.getOpcion().getItem().getSubtest().getVersionTest().getId());
-        return replaceOptionImage(image, optionId, file, altText, normalizeIdempotencyKey(idempotencyKey));
+        return replaceOptionImage(image, optionId, file, altText, idempotencyKey);
     }
 
     @Transactional
@@ -269,11 +268,12 @@ public class InstrumentImageService {
         OpcionItem option = find(OpcionItem.class, optionId);
         requireDraft(option.getItem().getSubtest().getVersionTest().getId());
         ImagenOpcion image = findOptionImageByOrder(optionId, order);
-        return replaceOptionImage(image, optionId, file, altText, normalizeIdempotencyKey(idempotencyKey));
+        return replaceOptionImage(image, optionId, file, altText, idempotencyKey);
     }
 
     private ImageUploadResponse replaceItemImage(ImagenItem image, long itemId, MultipartFile file, String altText,
-            String role, String uploadKey) throws IOException {
+            String role, String idempotencyKey) throws IOException {
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_ITEM, idempotencyKey);
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
@@ -309,7 +309,8 @@ public class InstrumentImageService {
     }
 
     private ImageUploadResponse replaceOptionImage(ImagenOpcion image, long optionId, MultipartFile file,
-            String altText, String uploadKey) throws IOException {
+            String altText, String idempotencyKey) throws IOException {
+        String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_OPTION, idempotencyKey);
         byte[] bytes = validatedBytes(file);
         String hash = sha256(bytes);
         RecursoMultimedia existing = findExistingIdempotentResource(uploadKey, hash);
@@ -357,15 +358,16 @@ public class InstrumentImageService {
         return file.getContentType().toLowerCase();
     }
 
-    private String normalizeIdempotencyKey(String idempotencyKey) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+    /**
+     * Valida la clave del cliente (400 si es invalida) y la acota por usuario y tipo de operacion: es el valor que se
+     * guarda y se busca en {@code clave_subida}. Null si la peticion no trae clave.
+     */
+    private String scopedKey(ImageUploadKeys.Operation operation, String idempotencyKey) {
+        String clientKey = ImageUploadKeys.normalize(idempotencyKey);
+        if (clientKey == null) {
             return null;
         }
-        String normalized = idempotencyKey.trim();
-        if (normalized.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {
-            throw new IllegalArgumentException("Idempotency-Key excede " + MAX_IDEMPOTENCY_KEY_LENGTH + " caracteres");
-        }
-        return normalized;
+        return ImageUploadKeys.scoped(currentActor.usuarioId(), operation, clientKey);
     }
 
     private RecursoMultimedia findExistingIdempotentResource(String uploadKey, String hash) {
@@ -436,13 +438,13 @@ public class InstrumentImageService {
             String role) {
         return new ImageUploadResponse(imageLinkId, resource.getId(), resource.getRutaAlmacenamiento(),
                 resource.getNombreArchivo(), resource.getTipoMime(), resource.getTamanoBytes(),
-                resource.getHashIntegridad(), order, altText, role, resource.getClaveSubida());
+                resource.getHashIntegridad(), order, altText, role, ImageUploadKeys.clientKey(resource.getClaveSubida()));
     }
 
     private ImageResourceUploadResponse looseResponse(RecursoMultimedia resource) {
         return new ImageResourceUploadResponse(resource.getId(), resource.getRutaAlmacenamiento(),
                 resource.getTipoMime(), resource.getNombreArchivo(), resource.getTamanoBytes(),
-                resource.getHashIntegridad(), resource.getClaveSubida());
+                resource.getHashIntegridad(), ImageUploadKeys.clientKey(resource.getClaveSubida()));
     }
 
     private VersionTest requireDraft(long versionId) {

@@ -318,6 +318,7 @@ class InstrumentImageServiceTest {
         Item item = itemWithVersion(10L, 20L, EstadoVersionTest.BORRADOR);
         when(em.find(Item.class, 10L)).thenReturn(item);
         when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+        when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
 
         byte[] content = "img".getBytes();
         String expectedHash = "b29814cf5792e684cd75d6a7fce7a67a11887e312f87ca2ac2496d81f365ff72";
@@ -328,7 +329,7 @@ class InstrumentImageServiceTest {
         existing.setTipoMime("image/png");
         existing.setTamanoBytes((long) content.length);
         existing.setHashIntegridad(expectedHash);
-        existing.setClaveSubida("11111111-2222-3333-4444-555555555555");
+        existing.setClaveSubida(scoped(ImageUploadKeys.Operation.ITEM, "11111111-2222-3333-4444-555555555555"));
 
         ImagenItem existingLink = new ImagenItem();
         existingLink.setId(55L);
@@ -341,7 +342,7 @@ class InstrumentImageServiceTest {
         TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
         when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
                 RecursoMultimedia.class)).thenReturn(resourceQuery);
-        when(resourceQuery.setParameter("uploadKey", "11111111-2222-3333-4444-555555555555"))
+        when(resourceQuery.setParameter("uploadKey", scoped(ImageUploadKeys.Operation.ITEM, "11111111-2222-3333-4444-555555555555")))
                 .thenReturn(resourceQuery);
         when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
         when(resourceQuery.getResultList()).thenReturn(java.util.List.of(existing));
@@ -370,16 +371,17 @@ class InstrumentImageServiceTest {
         Item item = itemWithVersion(10L, 20L, EstadoVersionTest.BORRADOR);
         when(em.find(Item.class, 10L)).thenReturn(item);
         when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+        when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
 
         RecursoMultimedia existing = new RecursoMultimedia();
         existing.setId(77L);
         existing.setHashIntegridad("otro-hash");
-        existing.setClaveSubida("11111111-2222-3333-4444-555555555555");
+        existing.setClaveSubida(scoped(ImageUploadKeys.Operation.ITEM, "11111111-2222-3333-4444-555555555555"));
 
         TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
         when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
                 RecursoMultimedia.class)).thenReturn(resourceQuery);
-        when(resourceQuery.setParameter("uploadKey", "11111111-2222-3333-4444-555555555555"))
+        when(resourceQuery.setParameter("uploadKey", scoped(ImageUploadKeys.Operation.ITEM, "11111111-2222-3333-4444-555555555555")))
                 .thenReturn(resourceQuery);
         when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
         when(resourceQuery.getResultList()).thenReturn(java.util.List.of(existing));
@@ -406,7 +408,7 @@ class InstrumentImageServiceTest {
         current.setTipoMime("image/png");
         current.setTamanoBytes((long) content.length);
         current.setHashIntegridad(expectedHash);
-        current.setClaveSubida("key-put-1");
+        current.setClaveSubida(scoped(ImageUploadKeys.Operation.REPLACE_ITEM, "key-put-1"));
 
         ImagenItem image = new ImagenItem();
         image.setId(55L);
@@ -418,11 +420,12 @@ class InstrumentImageServiceTest {
 
         when(em.find(ImagenItem.class, 55L)).thenReturn(image);
         when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+        when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
 
         TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
         when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
                 RecursoMultimedia.class)).thenReturn(resourceQuery);
-        when(resourceQuery.setParameter("uploadKey", "key-put-1")).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", scoped(ImageUploadKeys.Operation.REPLACE_ITEM, "key-put-1"))).thenReturn(resourceQuery);
         when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
         when(resourceQuery.getResultList()).thenReturn(java.util.List.of(current));
 
@@ -445,7 +448,7 @@ class InstrumentImageServiceTest {
         TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
         when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
                 RecursoMultimedia.class)).thenReturn(resourceQuery);
-        when(resourceQuery.setParameter("uploadKey", "loose-key-1")).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", scoped(ImageUploadKeys.Operation.LOOSE, "loose-key-1"))).thenReturn(resourceQuery);
         when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
         when(resourceQuery.getResultList()).thenReturn(java.util.List.of());
 
@@ -462,7 +465,8 @@ class InstrumentImageServiceTest {
         ArgumentCaptor<Object> persisted = ArgumentCaptor.forClass(Object.class);
         verify(em, Mockito.times(1)).persist(persisted.capture());
         assertThat(persisted.getValue()).isInstanceOf(RecursoMultimedia.class);
-        assertThat(((RecursoMultimedia) persisted.getValue()).getClaveSubida()).isEqualTo("loose-key-1");
+        assertThat(((RecursoMultimedia) persisted.getValue()).getClaveSubida())
+                .isEqualTo(scoped(ImageUploadKeys.Operation.LOOSE, "loose-key-1"));
     }
 
     @Test
@@ -477,12 +481,13 @@ class InstrumentImageServiceTest {
         existing.setTipoMime("image/png");
         existing.setTamanoBytes((long) content.length);
         existing.setHashIntegridad(hash);
-        existing.setClaveSubida("loose-key-dup");
+        existing.setClaveSubida(scoped(ImageUploadKeys.Operation.LOOSE, "loose-key-dup"));
+        when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
 
         TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
         when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
                 RecursoMultimedia.class)).thenReturn(resourceQuery);
-        when(resourceQuery.setParameter("uploadKey", "loose-key-dup")).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", scoped(ImageUploadKeys.Operation.LOOSE, "loose-key-dup"))).thenReturn(resourceQuery);
         when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
         when(resourceQuery.getResultList()).thenReturn(java.util.List.of(existing));
 
@@ -506,6 +511,10 @@ class InstrumentImageServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("25MB");
         verify(storage, never()).putObject(anyString(), anyString(), any());
+    }
+
+    private static String scoped(ImageUploadKeys.Operation operation, String clientKey) {
+        return ImageUploadKeys.scoped(ACTOR_ID, operation, clientKey);
     }
 
     private static Item itemWithVersion(long itemId, long versionId, EstadoVersionTest state) {

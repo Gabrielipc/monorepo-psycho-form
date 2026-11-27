@@ -155,7 +155,7 @@ public class ItemImageStorageService {
                 item.getId(), item.getNumeroOrden(), image.getRolImagen(), image.getNumeroOrden(),
                 image.getTextoAlternativo(), resource.getNombreArchivo(),
                 resource.getTipoMime(), resource.getTamanoBytes(), "/items/images/resources/" + resource.getId(),
-                resource.getHashIntegridad(), resource.getClaveSubida());
+                resource.getHashIntegridad(), ImageUploadKeys.clientKey(resource.getClaveSubida()));
     }
 
     private static String objectPath(Item item, String safeName) {

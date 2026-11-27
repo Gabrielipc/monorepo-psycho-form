@@ -1427,7 +1427,7 @@ public class InstrumentAdminService {
             result.computeIfAbsent(ownerId, ignored -> new ArrayList<>())
                     .add(new SubtestCloneTemplateDTO.ImageTemplate((Long) row[1], (Long) row[2],
                             (Integer) row[3], (String) row[4], (String) row[5], (String) row[6],
-                            (String) row[7], (Long) row[8], (String) row[9], (String) row[10]));
+                            (String) row[7], (Long) row[8], (String) row[9], ImageUploadKeys.clientKey((String) row[10])));
         }
         return result;
     }
@@ -1453,7 +1453,7 @@ public class InstrumentAdminService {
             result.computeIfAbsent(ownerId, ignored -> new ArrayList<>())
                     .add(new SubtestCloneTemplateDTO.ImageTemplate((Long) row[1], (Long) row[2],
                             (Integer) row[3], (String) row[4], (String) row[5], null,
-                            (String) row[6], (Long) row[7], (String) row[8], (String) row[9]));
+                            (String) row[6], (Long) row[7], (String) row[8], ImageUploadKeys.clientKey((String) row[9])));
         }
         return result;
     }
