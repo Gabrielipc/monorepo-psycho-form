@@ -150,7 +150,8 @@ public class ItemImageStorageService {
         return new ImageView(image.getId(), resource.getId(), test.getId(), version.getId(), subtest.getId(),
                 item.getId(), item.getNumeroOrden(), image.getRolImagen(), image.getNumeroOrden(),
                 image.getTextoAlternativo(), resource.getNombreArchivo(),
-                resource.getTipoMime(), resource.getTamanoBytes(), "/items/images/resources/" + resource.getId());
+                resource.getTipoMime(), resource.getTamanoBytes(), "/items/images/resources/" + resource.getId(),
+                resource.getHashIntegridad(), resource.getClaveSubida());
     }
 
     private static String objectPath(Item item, String safeName) {
@@ -196,7 +197,13 @@ public class ItemImageStorageService {
 
     public record ImageView(Long id, Long resourceId, Long testId, Long versionId, Long subtestId, Long itemId,
             Integer itemOrder, String role, Integer order, String altText, String fileName, String mimeType,
-            Long sizeBytes, String url) {
+            Long sizeBytes, String url, String sha256, String uploadKey) {
+        public ImageView(Long id, Long resourceId, Long testId, Long versionId, Long subtestId, Long itemId,
+                Integer itemOrder, String role, Integer order, String altText, String fileName, String mimeType,
+                Long sizeBytes, String url) {
+            this(id, resourceId, testId, versionId, subtestId, itemId, itemOrder, role, order, altText, fileName,
+                    mimeType, sizeBytes, url, null, null);
+        }
     }
 
     public record StoredFile(String fileName, String mimeType, byte[] bytes) {

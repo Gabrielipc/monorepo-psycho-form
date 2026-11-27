@@ -78,4 +78,27 @@ class InstrumentImageControllerWebTest {
 
         verify(images, never()).uploadItemImage(anyLong(), any(), any(), any(), any());
     }
+
+    @Test
+    void itemImageUploadForwardsIdempotencyKeyHeader() throws Exception {
+        when(images.uploadItemImage(eq(10L), any(), eq(2), eq("Figura"), eq("ENUNCIADO"), eq("key-123")))
+                .thenReturn(new ImageUploadResponse(55L, 77L, "test-config/items/10/file.png", "file.png",
+                        "image/png", 3L, "hash", 2, "Figura", "ENUNCIADO", "key-123"));
+        String token = jwt.emitir(UUID.fromString("22222222-2222-2222-2222-222222222222"), "ana",
+                Set.of("TEST_CREAR"), Set.of("PSICOLOGO_COORDINADOR"));
+        MockMultipartFile file = new MockMultipartFile("file", "file.png", "image/png", "img".getBytes());
+
+        mvc.perform(multipart("/items/{id}/images", 10L)
+                .file(file)
+                .param("order", "2")
+                .param("altText", "Figura")
+                .param("role", "ENUNCIADO")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .header("Idempotency-Key", "key-123")
+                .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.resourceId").value(77))
+                .andExpect(jsonPath("$.data.uploadKey").value("key-123"));
+    }
 }

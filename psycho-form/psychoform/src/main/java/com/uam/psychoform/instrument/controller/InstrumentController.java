@@ -171,16 +171,25 @@ public class InstrumentController {
     @PreAuthorize(SecurityPermissions.TEST_CREAR)
     public ApiResponse<?> itemImage(@PathVariable Long id, @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
             @RequestParam(required = false) Integer order, @RequestParam(required = false) String altText,
-            @RequestParam(required = false, defaultValue = "ENUNCIADO") String role) throws java.io.IOException {
-        return ApiResponse.ok(EntityView.of(images.uploadItemImage(id, file, order, altText, role)));
+            @RequestParam(required = false, defaultValue = "ENUNCIADO") String role,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
+            throws java.io.IOException {
+        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+                ? images.uploadItemImage(id, file, order, altText, role)
+                : images.uploadItemImage(id, file, order, altText, role, idempotencyKey);
+        return ApiResponse.ok(EntityView.of(uploaded));
     }
 
     @PostMapping(value = "/options/{id}/images", consumes = "multipart/form-data")
     @PreAuthorize(SecurityPermissions.TEST_CREAR)
     public ApiResponse<?> optionImage(@PathVariable Long id, @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
-            @RequestParam(required = false) Integer order, @RequestParam(required = false) String altText)
+            @RequestParam(required = false) Integer order, @RequestParam(required = false) String altText,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        return ApiResponse.ok(EntityView.of(images.uploadOptionImage(id, file, order, altText)));
+        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+                ? images.uploadOptionImage(id, file, order, altText)
+                : images.uploadOptionImage(id, file, order, altText, idempotencyKey);
+        return ApiResponse.ok(EntityView.of(uploaded));
     }
 
     @PutMapping(value = "/items/{itemId}/images/{imageId}", consumes = "multipart/form-data")
@@ -188,8 +197,13 @@ public class InstrumentController {
     public ApiResponse<?> replaceItemImage(@PathVariable Long itemId, @PathVariable Long imageId,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
             @RequestParam(required = false) String altText,
-            @RequestParam(required = false, defaultValue = "ENUNCIADO") String role) throws java.io.IOException {
-        return ApiResponse.ok(EntityView.of(images.replaceItemImage(itemId, imageId, file, altText, role)));
+            @RequestParam(required = false, defaultValue = "ENUNCIADO") String role,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
+            throws java.io.IOException {
+        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+                ? images.replaceItemImage(itemId, imageId, file, altText, role)
+                : images.replaceItemImage(itemId, imageId, file, altText, role, idempotencyKey);
+        return ApiResponse.ok(EntityView.of(uploaded));
     }
 
     @PutMapping(value = "/items/{itemId}/images/by-order/{order}", consumes = "multipart/form-data")
@@ -197,24 +211,43 @@ public class InstrumentController {
     public ApiResponse<?> replaceItemImageByOrder(@PathVariable Long itemId, @PathVariable Integer order,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
             @RequestParam(required = false) String altText,
-            @RequestParam(required = false, defaultValue = "ENUNCIADO") String role) throws java.io.IOException {
-        return ApiResponse.ok(EntityView.of(images.replaceItemImageByOrder(itemId, order, file, altText, role)));
+            @RequestParam(required = false, defaultValue = "ENUNCIADO") String role,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
+            throws java.io.IOException {
+        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+                ? images.replaceItemImageByOrder(itemId, order, file, altText, role)
+                : images.replaceItemImageByOrder(itemId, order, file, altText, role, idempotencyKey);
+        return ApiResponse.ok(EntityView.of(uploaded));
     }
 
     @PutMapping(value = "/options/{optionId}/images/{imageId}", consumes = "multipart/form-data")
     @PreAuthorize(SecurityPermissions.TEST_CREAR)
     public ApiResponse<?> replaceOptionImage(@PathVariable Long optionId, @PathVariable Long imageId,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
-            @RequestParam(required = false) String altText) throws java.io.IOException {
-        return ApiResponse.ok(EntityView.of(images.replaceOptionImage(optionId, imageId, file, altText)));
+            @RequestParam(required = false) String altText,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
+            throws java.io.IOException {
+        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+                ? images.replaceOptionImage(optionId, imageId, file, altText)
+                : images.replaceOptionImage(optionId, imageId, file, altText, idempotencyKey);
+        return ApiResponse.ok(EntityView.of(uploaded));
     }
 
     @PutMapping(value = "/options/{optionId}/images/by-order/{order}", consumes = "multipart/form-data")
     @PreAuthorize(SecurityPermissions.TEST_CREAR)
     public ApiResponse<?> replaceOptionImageByOrder(@PathVariable Long optionId, @PathVariable Integer order,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file,
-            @RequestParam(required = false) String altText) throws java.io.IOException {
-        return ApiResponse.ok(EntityView.of(images.replaceOptionImageByOrder(optionId, order, file, altText)));
+            @RequestParam(required = false) String altText,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
+            throws java.io.IOException {
+        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+                ? images.replaceOptionImageByOrder(optionId, order, file, altText)
+                : images.replaceOptionImageByOrder(optionId, order, file, altText, idempotencyKey);
+        return ApiResponse.ok(EntityView.of(uploaded));
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     @GetMapping("/scoring/strategies")

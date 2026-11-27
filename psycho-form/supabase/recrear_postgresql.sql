@@ -2537,6 +2537,13 @@ ON CONFLICT DO NOTHING;
 CREATE INDEX IF NOT EXISTS idx_intento_estado_fin
     ON intento_test(estado, finalizado_en);
 
+-- migrations/20261126000600_recurso_clave_subida.sql
+ALTER TABLE public.recurso_multimedia
+    ADD COLUMN IF NOT EXISTS clave_subida VARCHAR(128);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_recurso_multimedia_clave_subida
+    ON public.recurso_multimedia(clave_subida);
+
 -- migrations/20261126000700_codigos_deferrable.sql
 -- Permite reutilizar codigos en el arbol de configuracion dentro de una misma
 -- transaccion (borrar y crear en el mismo guardado), posponiendo la validacion

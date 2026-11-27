@@ -201,7 +201,8 @@ class InstrumentAdminServiceConfigurationEditTest {
         TypedQuery<Object[]> itemImageQuery = Mockito.mock();
         when(em.createQuery("""
                 SELECT img.item.id, img.id, img.recurso.id, img.numeroOrden, img.textoAlternativo,
-                       res.rutaAlmacenamiento, img.rolImagen
+                       res.rutaAlmacenamiento, img.rolImagen,
+                       res.nombreArchivo, res.tamanoBytes, res.hashIntegridad, res.claveSubida
                 FROM ImagenItem img
                 JOIN img.recurso res
                 WHERE img.item.id IN :itemIds
@@ -209,12 +210,14 @@ class InstrumentAdminServiceConfigurationEditTest {
                 """, Object[].class)).thenReturn(itemImageQuery);
         when(itemImageQuery.setParameter("itemIds", List.of(30L))).thenReturn(itemImageQuery);
         when(itemImageQuery.getResultList()).thenReturn(List.<Object[]>of(
-                new Object[] { 30L, 60L, 70L, 1, "Figura", "items/30/a.png", "ENUNCIADO" }));
+                new Object[] { 30L, 60L, 70L, 1, "Figura", "items/30/a.png", "ENUNCIADO",
+                        "a.png", 123L, "sha-item-70", "key-item-70" }));
 
         TypedQuery<Object[]> optionImageQuery = Mockito.mock();
         when(em.createQuery("""
                 SELECT img.opcion.id, img.id, img.recurso.id, img.numeroOrden, img.textoAlternativo,
-                       res.rutaAlmacenamiento
+                       res.rutaAlmacenamiento,
+                       res.nombreArchivo, res.tamanoBytes, res.hashIntegridad, res.claveSubida
                 FROM ImagenOpcion img
                 JOIN img.recurso res
                 WHERE img.opcion.id IN :optionIds
@@ -222,7 +225,8 @@ class InstrumentAdminServiceConfigurationEditTest {
                 """, Object[].class)).thenReturn(optionImageQuery);
         when(optionImageQuery.setParameter("optionIds", List.of(40L))).thenReturn(optionImageQuery);
         when(optionImageQuery.getResultList()).thenReturn(List.<Object[]>of(
-                new Object[] { 40L, 61L, 71L, 1, "Opcion", "options/40/a.png" }));
+                new Object[] { 40L, 61L, 71L, 1, "Opcion", "options/40/a.png",
+                        "opt.png", 456L, "sha-opt-71", "key-opt-71" }));
 
         var template = service.getCloneTemplate(20L);
 
@@ -230,8 +234,18 @@ class InstrumentAdminServiceConfigurationEditTest {
         assertThat(template.items()).hasSize(1);
         assertThat(template.items().getFirst().sourceItemId()).isEqualTo(30L);
         assertThat(template.items().getFirst().options().getFirst().sourceOptionId()).isEqualTo(40L);
-        assertThat(template.items().getFirst().images().getFirst().resourceId()).isEqualTo(70L);
-        assertThat(template.items().getFirst().options().getFirst().images().getFirst().resourceId()).isEqualTo(71L);
+        var itemImg = template.items().getFirst().images().getFirst();
+        assertThat(itemImg.resourceId()).isEqualTo(70L);
+        assertThat(itemImg.originalFileName()).isEqualTo("a.png");
+        assertThat(itemImg.sizeBytes()).isEqualTo(123L);
+        assertThat(itemImg.sha256()).isEqualTo("sha-item-70");
+        assertThat(itemImg.uploadKey()).isEqualTo("key-item-70");
+        var optImg = template.items().getFirst().options().getFirst().images().getFirst();
+        assertThat(optImg.resourceId()).isEqualTo(71L);
+        assertThat(optImg.originalFileName()).isEqualTo("opt.png");
+        assertThat(optImg.sizeBytes()).isEqualTo(456L);
+        assertThat(optImg.sha256()).isEqualTo("sha-opt-71");
+        assertThat(optImg.uploadKey()).isEqualTo("key-opt-71");
         assertThat(template.items().getFirst().answerKey().correctOptionSourceId()).isEqualTo(40L);
         Mockito.verify(em, Mockito.never()).persist(Mockito.any());
     }

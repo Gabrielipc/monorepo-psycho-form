@@ -1010,7 +1010,8 @@ public class InstrumentAdminService {
         }
         List<Object[]> rows = em.createQuery("""
                 SELECT img.item.id, img.id, img.recurso.id, img.numeroOrden, img.textoAlternativo,
-                       res.rutaAlmacenamiento, img.rolImagen
+                       res.rutaAlmacenamiento, img.rolImagen,
+                       res.nombreArchivo, res.tamanoBytes, res.hashIntegridad, res.claveSubida
                 FROM ImagenItem img
                 JOIN img.recurso res
                 WHERE img.item.id IN :itemIds
@@ -1023,7 +1024,8 @@ public class InstrumentAdminService {
             Long ownerId = (Long) row[0];
             result.computeIfAbsent(ownerId, ignored -> new ArrayList<>())
                     .add(new SubtestCloneTemplateDTO.ImageTemplate((Long) row[1], (Long) row[2],
-                            (Integer) row[3], (String) row[4], (String) row[5], (String) row[6]));
+                            (Integer) row[3], (String) row[4], (String) row[5], (String) row[6],
+                            (String) row[7], (Long) row[8], (String) row[9], (String) row[10]));
         }
         return result;
     }
@@ -1034,7 +1036,8 @@ public class InstrumentAdminService {
         }
         List<Object[]> rows = em.createQuery("""
                 SELECT img.opcion.id, img.id, img.recurso.id, img.numeroOrden, img.textoAlternativo,
-                       res.rutaAlmacenamiento
+                       res.rutaAlmacenamiento,
+                       res.nombreArchivo, res.tamanoBytes, res.hashIntegridad, res.claveSubida
                 FROM ImagenOpcion img
                 JOIN img.recurso res
                 WHERE img.opcion.id IN :optionIds
@@ -1047,7 +1050,8 @@ public class InstrumentAdminService {
             Long ownerId = (Long) row[0];
             result.computeIfAbsent(ownerId, ignored -> new ArrayList<>())
                     .add(new SubtestCloneTemplateDTO.ImageTemplate((Long) row[1], (Long) row[2],
-                            (Integer) row[3], (String) row[4], (String) row[5], null));
+                            (Integer) row[3], (String) row[4], (String) row[5], null,
+                            (String) row[6], (Long) row[7], (String) row[8], (String) row[9]));
         }
         return result;
     }

@@ -269,6 +269,128 @@ class InstrumentImageServiceTest {
                 .hasMessageContaining("orden 1");
     }
 
+    @Test
+    void idempotencyKeyRepetidaConMismoArchivoDevuelveRecursoExistenteSinSubirAStorage() throws IOException {
+        Item item = itemWithVersion(10L, 20L, EstadoVersionTest.BORRADOR);
+        when(em.find(Item.class, 10L)).thenReturn(item);
+        when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+
+        byte[] content = "img".getBytes();
+        String expectedHash = "b29814cf5792e684cd75d6a7fce7a67a11887e312f87ca2ac2496d81f365ff72";
+        RecursoMultimedia existing = new RecursoMultimedia();
+        existing.setId(77L);
+        existing.setRutaAlmacenamiento("test-config/items/10/figura.png");
+        existing.setNombreArchivo("figura.png");
+        existing.setTipoMime("image/png");
+        existing.setTamanoBytes((long) content.length);
+        existing.setHashIntegridad(expectedHash);
+        existing.setClaveSubida("11111111-2222-3333-4444-555555555555");
+
+        ImagenItem existingLink = new ImagenItem();
+        existingLink.setId(55L);
+        existingLink.setItem(item);
+        existingLink.setRecurso(existing);
+        existingLink.setNumeroOrden(2);
+        existingLink.setTextoAlternativo("Figura");
+        existingLink.setRolImagen("ENUNCIADO");
+
+        TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
+        when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
+                RecursoMultimedia.class)).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", "11111111-2222-3333-4444-555555555555"))
+                .thenReturn(resourceQuery);
+        when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
+        when(resourceQuery.getResultList()).thenReturn(java.util.List.of(existing));
+
+        TypedQuery<ImagenItem> linkQuery = Mockito.mock();
+        when(em.createQuery("SELECT img FROM ImagenItem img WHERE img.item.id = :itemId AND img.recurso.id = :resourceId",
+                ImagenItem.class)).thenReturn(linkQuery);
+        when(linkQuery.setParameter("itemId", 10L)).thenReturn(linkQuery);
+        when(linkQuery.setParameter("resourceId", 77L)).thenReturn(linkQuery);
+        when(linkQuery.setMaxResults(1)).thenReturn(linkQuery);
+        when(linkQuery.getResultList()).thenReturn(java.util.List.of(existingLink));
+
+        MockMultipartFile file = new MockMultipartFile("file", "figura.png", "image/png", content);
+        ImageUploadResponse response = service.uploadItemImage(10L, file, 2, "Figura", "ENUNCIADO",
+                "11111111-2222-3333-4444-555555555555");
+
+        assertThat(response.imageLinkId()).isEqualTo(55L);
+        assertThat(response.resourceId()).isEqualTo(77L);
+        assertThat(response.uploadKey()).isEqualTo("11111111-2222-3333-4444-555555555555");
+        verify(storage, never()).putObject(anyString(), anyString(), any());
+        verify(em, never()).persist(any());
+    }
+
+    @Test
+    void idempotencyKeyRepetidaConArchivoDistintoLanzaConflicto() {
+        Item item = itemWithVersion(10L, 20L, EstadoVersionTest.BORRADOR);
+        when(em.find(Item.class, 10L)).thenReturn(item);
+        when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+
+        RecursoMultimedia existing = new RecursoMultimedia();
+        existing.setId(77L);
+        existing.setHashIntegridad("otro-hash");
+        existing.setClaveSubida("11111111-2222-3333-4444-555555555555");
+
+        TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
+        when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
+                RecursoMultimedia.class)).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", "11111111-2222-3333-4444-555555555555"))
+                .thenReturn(resourceQuery);
+        when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
+        when(resourceQuery.getResultList()).thenReturn(java.util.List.of(existing));
+
+        MockMultipartFile file = new MockMultipartFile("file", "figura.png", "image/png", "distinto".getBytes());
+
+        assertThatThrownBy(() -> service.uploadItemImage(10L, file, 2, "Figura", "ENUNCIADO",
+                "11111111-2222-3333-4444-555555555555"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Idempotency-Key");
+        verify(storage, never()).putObject(anyString(), anyString(), any());
+    }
+
+    @Test
+    void replaceItemImageConIdempotencyKeyRepetidaDevuelveRecursoActualSinResubir() throws Exception {
+        Item item = itemWithVersion(10L, 20L, EstadoVersionTest.BORRADOR);
+        byte[] content = "new".getBytes();
+        String expectedHash = java.util.HexFormat.of()
+                .formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content));
+        RecursoMultimedia current = new RecursoMultimedia();
+        current.setId(88L);
+        current.setRutaAlmacenamiento("test-config/items/10/nueva.png");
+        current.setNombreArchivo("nueva.png");
+        current.setTipoMime("image/png");
+        current.setTamanoBytes((long) content.length);
+        current.setHashIntegridad(expectedHash);
+        current.setClaveSubida("key-put-1");
+
+        ImagenItem image = new ImagenItem();
+        image.setId(55L);
+        image.setItem(item);
+        image.setNumeroOrden(2);
+        image.setRolImagen("ENUNCIADO");
+        image.setTextoAlternativo("Nueva");
+        image.setRecurso(current);
+
+        when(em.find(ImagenItem.class, 55L)).thenReturn(image);
+        when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+
+        TypedQuery<RecursoMultimedia> resourceQuery = Mockito.mock();
+        when(em.createQuery("SELECT r FROM RecursoMultimedia r WHERE r.claveSubida = :uploadKey",
+                RecursoMultimedia.class)).thenReturn(resourceQuery);
+        when(resourceQuery.setParameter("uploadKey", "key-put-1")).thenReturn(resourceQuery);
+        when(resourceQuery.setMaxResults(1)).thenReturn(resourceQuery);
+        when(resourceQuery.getResultList()).thenReturn(java.util.List.of(current));
+
+        MockMultipartFile file = new MockMultipartFile("file", "nueva.png", "image/png", content);
+        ImageUploadResponse response = service.replaceItemImage(10L, 55L, file, "Nueva", "ENUNCIADO", "key-put-1");
+
+        assertThat(response.resourceId()).isEqualTo(88L);
+        assertThat(response.uploadKey()).isEqualTo("key-put-1");
+        verify(storage, never()).putObject(anyString(), anyString(), any());
+        verify(storage, never()).deleteObject(anyString());
+    }
+
     private static Item itemWithVersion(long itemId, long versionId, EstadoVersionTest state) {
         VersionTest version = new VersionTest();
         version.setId(versionId);
