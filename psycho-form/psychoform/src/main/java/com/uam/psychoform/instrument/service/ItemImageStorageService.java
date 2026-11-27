@@ -32,10 +32,12 @@ public class ItemImageStorageService {
     private final AuditLogService audit;
     private final Clock clock;
     private final ObjectStorageService storage;
+    private final ImageResourceReleaser releaser;
 
     public ItemImageStorageService(ItemLookupRepository items, RecursoMultimediaRepository recursos,
             ImagenItemRepository imagenes, UsuarioRepository usuarios, CurrentActor currentActor,
-            AuditLogService audit, Clock clock, ObjectStorageService storage) {
+            AuditLogService audit, Clock clock, ObjectStorageService storage,
+            ImageResourceReleaser releaser) {
         this.items = items;
         this.recursos = recursos;
         this.imagenes = imagenes;
@@ -44,6 +46,7 @@ public class ItemImageStorageService {
         this.audit = audit;
         this.clock = clock;
         this.storage = storage;
+        this.releaser = releaser;
     }
 
     @PreAuthorize(SecurityPermissions.TEST_LEER)
@@ -134,9 +137,10 @@ public class ItemImageStorageService {
                 .orElseThrow(() -> new EntityNotFoundException("Imagen no encontrada: " + imageId));
         Long itemId = image.getItem().getId();
         RecursoMultimedia resource = image.getRecurso();
-        storage.deleteObject(resource.getRutaAlmacenamiento());
+        // Solo se elimina el vinculo: el recurso puede seguir en uso por una version clonada (B9). El recurso y su
+        // objeto se borran (tras el commit) unicamente si no queda ninguna referencia.
         imagenes.delete(image);
-        recursos.delete(resource);
+        releaser.releaseIfUnreferenced(resource);
         audit.recordTrusted(new AuditLogService.AuditEvent("IMAGEN_ITEM_ELIMINADA", "item", String.valueOf(itemId),
                 "{\"imagenId\":" + imageId + "}", null, null, null));
     }

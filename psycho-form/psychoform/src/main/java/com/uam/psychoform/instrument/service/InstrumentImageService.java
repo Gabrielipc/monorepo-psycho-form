@@ -48,15 +48,17 @@ public class InstrumentImageService {
     private final CurrentActor currentActor;
     private final ObjectStorageService storage;
     private final Clock clock;
+    private final ImageResourceReleaser releaser;
 
     public InstrumentImageService(EntityManager em, VersionTestRepository versions, UsuarioRepository users,
-            CurrentActor currentActor, ObjectStorageService storage, Clock clock) {
+            CurrentActor currentActor, ObjectStorageService storage, Clock clock, ImageResourceReleaser releaser) {
         this.em = em;
         this.versions = versions;
         this.users = users;
         this.currentActor = currentActor;
         this.storage = storage;
         this.clock = clock;
+        this.releaser = releaser;
     }
 
     @Transactional
@@ -294,7 +296,7 @@ public class InstrumentImageService {
             image.setTextoAlternativo(altText);
             image.setRolImagen(blank(role) ? previousRole : role);
             em.flush();
-            deleteBestEffort(previousResource.getRutaAlmacenamiento());
+            releaser.releaseIfUnreferenced(previousResource);
             return response(image.getId(), resource, image.getNumeroOrden(), image.getTextoAlternativo(),
                     image.getRolImagen());
         } catch (RuntimeException ex) {
@@ -327,7 +329,7 @@ public class InstrumentImageService {
             image.setRecurso(resource);
             image.setTextoAlternativo(altText);
             em.flush();
-            deleteBestEffort(previousResource.getRutaAlmacenamiento());
+            releaser.releaseIfUnreferenced(previousResource);
             return response(image.getId(), resource, image.getNumeroOrden(), image.getTextoAlternativo(), null);
         } catch (RuntimeException ex) {
             image.setRecurso(previousResource);

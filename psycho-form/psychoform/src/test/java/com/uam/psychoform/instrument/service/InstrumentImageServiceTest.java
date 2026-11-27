@@ -44,7 +44,8 @@ class InstrumentImageServiceTest {
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final ObjectStorageService storage = Mockito.mock(ObjectStorageService.class);
     private final InstrumentImageService service = new InstrumentImageService(em, versions, users, currentActor,
-            storage, Clock.fixed(Instant.parse("2026-06-26T10:15:30Z"), ZoneOffset.UTC));
+            storage, Clock.fixed(Instant.parse("2026-06-26T10:15:30Z"), ZoneOffset.UTC),
+            new ImageResourceReleaser(em, storage));
 
     @Test
     void rechazaArchivoVacioSinSubirAStorage() {
@@ -214,6 +215,7 @@ class InstrumentImageServiceTest {
         when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
         when(users.findById(ACTOR_ID)).thenReturn(Optional.of(actor));
         when(storage.putObject(anyString(), anyString(), any())).thenReturn(new StoredObject("stored-key", "etag"));
+        stubLinkCounts(0L, 0L);
         MockMultipartFile file = new MockMultipartFile("file", "nueva.png", "image/png", "new".getBytes());
 
         ImageUploadResponse response = service.replaceItemImageByOrder(10L, 2, file, "Nueva", "ENUNCIADO");
@@ -221,7 +223,49 @@ class InstrumentImageServiceTest {
         assertThat(response.imageLinkId()).isEqualTo(55L);
         assertThat(image.getRecurso()).isNotSameAs(previous);
         assertThat(image.getTextoAlternativo()).isEqualTo("Nueva");
+        verify(em).remove(previous);
         verify(storage).deleteObject("test-config/items/10/old.png");
+    }
+
+    @Test
+    void reemplazarConRecursoCompartidoSoloCambiaElVinculoYNoBorraElObjeto() throws IOException {
+        Item item = itemWithVersion(10L, 20L, EstadoVersionTest.BORRADOR);
+        ImagenItem image = new ImagenItem();
+        image.setId(55L);
+        image.setItem(item);
+        image.setNumeroOrden(2);
+        image.setRolImagen("ENUNCIADO");
+        RecursoMultimedia shared = new RecursoMultimedia();
+        shared.setId(77L);
+        shared.setRutaAlmacenamiento("test-config/items/10/shared.png");
+        image.setRecurso(shared);
+        when(em.find(ImagenItem.class, 55L)).thenReturn(image);
+        when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
+        when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
+        when(users.findById(ACTOR_ID)).thenReturn(Optional.of(new Usuario()));
+        when(storage.putObject(anyString(), anyString(), any())).thenReturn(new StoredObject("stored-key", "etag"));
+        // Otra version (la original) sigue apuntando al mismo recurso.
+        stubLinkCounts(1L, 0L);
+        MockMultipartFile file = new MockMultipartFile("file", "nueva.png", "image/png", "new".getBytes());
+
+        service.replaceItemImage(10L, 55L, file, "Nueva", "ENUNCIADO");
+
+        assertThat(image.getRecurso()).isNotSameAs(shared);
+        verify(em, never()).remove(shared);
+        verify(storage, never()).deleteObject("test-config/items/10/shared.png");
+    }
+
+    private void stubLinkCounts(Long itemLinks, Long optionLinks) {
+        TypedQuery<Long> itemCount = Mockito.mock();
+        TypedQuery<Long> optionCount = Mockito.mock();
+        when(itemCount.setParameter(Mockito.eq("id"), any())).thenReturn(itemCount);
+        when(itemCount.getSingleResult()).thenReturn(itemLinks);
+        when(optionCount.setParameter(Mockito.eq("id"), any())).thenReturn(optionCount);
+        when(optionCount.getSingleResult()).thenReturn(optionLinks);
+        when(em.createQuery("SELECT COUNT(img) FROM ImagenItem img WHERE img.recurso.id = :id", Long.class))
+                .thenReturn(itemCount);
+        when(em.createQuery("SELECT COUNT(img) FROM ImagenOpcion img WHERE img.recurso.id = :id", Long.class))
+                .thenReturn(optionCount);
     }
 
     @Test
