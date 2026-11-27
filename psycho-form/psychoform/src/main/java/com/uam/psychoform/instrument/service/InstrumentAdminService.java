@@ -522,6 +522,7 @@ public class InstrumentAdminService {
                 throw new IllegalArgumentException("Orden de item duplicado: " + item.order());
             }
             List<VersionConfigurationRequest.OptionDraft> options = nullToEmpty(item.options());
+            validateImageDrafts(nullToEmpty(item.images()), "item");
             validateOptionDrafts(options);
             validateItemAnswerKeyDraft(item, options, itemsDeletingAnswerKey, itemsCreatingAnswerKey,
                     itemDraftsDeletingAnswerKey, itemDraftsCreatingAnswerKey);
@@ -661,6 +662,19 @@ public class InstrumentAdminService {
             }
             if (option.order() != null && !optionOrders.add(option.order())) {
                 throw new IllegalArgumentException("Orden de opcion duplicado: " + option.order());
+            }
+            validateImageDrafts(nullToEmpty(option.images()), "opcion");
+        }
+    }
+
+    private void validateImageDrafts(List<VersionConfigurationRequest.ImageDraft> images, String owner) {
+        Set<Integer> imageOrders = new HashSet<>();
+        for (VersionConfigurationRequest.ImageDraft image : images) {
+            if (image.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+                continue;
+            }
+            if (image.order() != null && !imageOrders.add(image.order())) {
+                throw new IllegalArgumentException("Orden de imagen de " + owner + " duplicado: " + image.order());
             }
         }
     }
