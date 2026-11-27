@@ -9,14 +9,18 @@ import static org.mockito.Mockito.when;
 import com.uam.psychoform.academic.model.Participante;
 import com.uam.psychoform.assessment.model.AsignacionTest;
 import com.uam.psychoform.assessment.model.IntentoTest;
+import com.uam.psychoform.assessment.model.OpcionSeleccionadaRespuesta;
 import com.uam.psychoform.assessment.model.RespuestaItem;
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
 import com.uam.psychoform.assessment.repository.IntentoTestRepository;
+import com.uam.psychoform.assessment.repository.OpcionSeleccionadaRespuestaRepository;
 import com.uam.psychoform.audit.service.AuditLogService;
 import com.uam.psychoform.assessment.model.SesionAplicacion;
 import com.uam.psychoform.instrument.model.Baremo;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
 import com.uam.psychoform.instrument.model.DimensionResultado;
+import com.uam.psychoform.instrument.model.OpcionItem;
+import com.uam.psychoform.instrument.model.OpcionPuntajeDimension;
 import com.uam.psychoform.instrument.model.RangoBaremo;
 import com.uam.psychoform.instrument.model.Subtest;
 import com.uam.psychoform.instrument.model.VersionTest;
@@ -24,6 +28,7 @@ import com.uam.psychoform.instrument.model.ReglaCalificacion;
 import com.uam.psychoform.instrument.repository.BaremoRepository;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.DimensionResultadoLookupRepository;
+import com.uam.psychoform.instrument.repository.OpcionPuntajeDimensionRepository;
 import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.model.Resultado;
@@ -66,7 +71,10 @@ class ManualReviewServiceTest {
     private final DimensionResultadoLookupRepository dimensionesLookup = Mockito.mock(DimensionResultadoLookupRepository.class);
     private final BaremoRepository baremos = Mockito.mock(BaremoRepository.class);
     private final RangoBaremoRepository rangosBaremo = Mockito.mock(RangoBaremoRepository.class);
-    private final DimensionScoreSupport dimensionScores = new DimensionScoreSupport(dimensionesLookup, baremos, rangosBaremo);
+    private final OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas = Mockito.mock(OpcionSeleccionadaRespuestaRepository.class);
+    private final OpcionPuntajeDimensionRepository puntajesDimension = Mockito.mock(OpcionPuntajeDimensionRepository.class);
+    private final DimensionScoreSupport dimensionScores = new DimensionScoreSupport(dimensionesLookup, baremos, rangosBaremo,
+            answers, opcionesSeleccionadas, keys, puntajesDimension, reviews);
     private final ManualReviewService service = new ManualReviewService(reviews, answers, attempts, results, gradings,
             dimensionResults, keys, dimensionScores, users, currentActor, audit, CLOCK);
 
@@ -322,13 +330,15 @@ class ManualReviewServiceTest {
         verify(reviews, never()).findByEstadoOrderByCreadoEnAsc(EstadoRevisionManual.PENDIENTE);
     }
 
-    @Test
-    void resolverRevisionesRecalculaPuntajeYRangoDelSubtestYCuadraConElTotal() {
-        Escenario e = escenario(2);
-        e.reviewerStubs();
+    /**
+     * Subtest 5 / dimension 60 de la version 100 con baremo (Bajo 0-3, Medio 3.01-10, Alto 10.01-20). Los items
+     * manuales del escenario pertenecen al subtest y el primero tiene una opcion elegida con 4.00 en la matriz de la
+     * dimension (aporte automatico que la regla vigente excluye). Si {@code autoPoints} no es nulo, se agrega una
+     * respuesta automatica del subtest que aporta esos puntos por la matriz.
+     */
+    private DimensionResultado subtestSetup(Escenario e, String autoPoints) {
         Subtest subtest = new Subtest();
         subtest.setId(5L);
-        e.gradingList.forEach(g -> g.getRespuesta().getItem().setSubtest(subtest));
         VersionTest version = new VersionTest();
         version.setId(100L);
         SesionAplicacion sesion = new SesionAplicacion();
@@ -337,23 +347,100 @@ class ManualReviewServiceTest {
         DimensionResultado dimension = new DimensionResultado();
         dimension.setId(60L);
         dimension.setSubtest(subtest);
-        // El subtest ya tiene fila con puntaje 1.00 de items automaticos; las manuales aun no suman.
         e.dimension.setDimensionResultado(dimension);
-        e.dimension.setPuntajeDirecto(new BigDecimal("1.00"));
+
+        List<RespuestaItem> attemptAnswers = new java.util.ArrayList<>();
+        List<ClaveRespuesta> claves = new java.util.ArrayList<>();
+        List<OpcionSeleccionadaRespuesta> selections = new java.util.ArrayList<>();
+        List<OpcionPuntajeDimension> matrix = new java.util.ArrayList<>();
+        for (int i = 0; i < e.gradingList.size(); i++) {
+            RespuestaItem answer = e.gradingList.get(i).getRespuesta();
+            answer.getItem().setSubtest(subtest);
+            attemptAnswers.add(answer);
+            ClaveRespuesta clave = new ClaveRespuesta();
+            clave.setItem(answer.getItem());
+            clave.setRequiereRevisionManual(true);
+            claves.add(clave);
+            if (i == 0) {
+                selections.add(selection(answer, 23L));
+                matrix.add(matrixRow(23L, dimension, "4.00"));
+            }
+        }
+        if (autoPoints != null) {
+            Item autoItem = new Item();
+            autoItem.setId(90L);
+            autoItem.setSubtest(subtest);
+            RespuestaItem autoAnswer = new RespuestaItem();
+            autoAnswer.setId(99L);
+            autoAnswer.setIntento(e.result.getIntento());
+            autoAnswer.setItem(autoItem);
+            autoAnswer.setRequiereRevisionManual(false);
+            attemptAnswers.add(autoAnswer);
+            ClaveRespuesta clave = new ClaveRespuesta();
+            clave.setItem(autoItem);
+            clave.setRequiereRevisionManual(false);
+            claves.add(clave);
+            selections.add(selection(autoAnswer, 91L));
+            matrix.add(matrixRow(91L, dimension, autoPoints));
+        }
         Baremo baremo = new Baremo();
         baremo.setId(70L);
         baremo.setDimensionResultado(dimension);
+        when(answers.findByIntentoIdWithItem(33L)).thenReturn(attemptAnswers);
+        when(keys.findOfficialKeysByVersionId(100L)).thenReturn(claves);
+        when(opcionesSeleccionadas.findByRespuestaIdIn(Mockito.anyCollection())).thenReturn(selections);
+        when(puntajesDimension.findActiveOfficialByVersionAndOptionIds(Mockito.eq(100L), Mockito.anyCollection()))
+                .thenReturn(matrix);
+        when(reviews.findByRespuestaIdIn(Mockito.anyCollection())).thenAnswer(invocation -> e.reviews);
         when(dimensionesLookup.findActiveSubtestDimensionsByVersionId(100L)).thenReturn(List.of(dimension));
         when(baremos.findPreferredDimensionBaremos(Mockito.eq(100L), Mockito.anyCollection())).thenReturn(List.of(baremo));
         when(rangosBaremo.findByBaremoIdInOrderByBaremoAndRangeOrder(List.of(70L))).thenReturn(List.of(
                 rango(baremo, "0", "3", "Bajo"), rango(baremo, "3.01", "10", "Medio"), rango(baremo, "10.01", "20", "Alto")));
+        return dimension;
+    }
 
-        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("4.50"), "ok", true));
+    private static OpcionSeleccionadaRespuesta selection(RespuestaItem answer, Long optionId) {
+        OpcionItem option = new OpcionItem();
+        option.setId(optionId);
+        OpcionSeleccionadaRespuesta selection = new OpcionSeleccionadaRespuesta();
+        selection.setRespuesta(answer);
+        selection.setOpcion(option);
+        return selection;
+    }
+
+    private static OpcionPuntajeDimension matrixRow(Long optionId, DimensionResultado dimension, String points) {
+        OpcionItem option = new OpcionItem();
+        option.setId(optionId);
+        OpcionPuntajeDimension row = new OpcionPuntajeDimension();
+        row.setOpcion(option);
+        row.setDimensionResultado(dimension);
+        row.setPuntaje(new BigDecimal(points));
+        row.setPeso(BigDecimal.ONE);
+        return row;
+    }
+
+    private ManualReviewService.ReviewCommand approve(String score) {
+        return new ManualReviewService.ReviewCommand(new BigDecimal(score), "ok", true);
+    }
+
+    private ManualReviewService.ReviewCommand observe() {
+        return new ManualReviewService.ReviewCommand(null, "revisar de nuevo", false);
+    }
+
+    @Test
+    void resolverRevisionesRecalculaPuntajeYRangoDelSubtestYCuadraConElTotal() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+        subtestSetup(e, "1.00");
+        // Flujo nuevo: la fila tiene solo el aporte automatico (1.00); las manuales aun no suman.
+        e.dimension.setPuntajeDirecto(new BigDecimal("1.00"));
+
+        service.resolve(e.reviews.get(0).getId(), approve("4.50"));
 
         assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("5.50");
         assertThat(e.dimension.getCategoria()).isEqualTo("Medio");
 
-        service.resolve(e.reviews.get(1).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("5.00"), "ok", true));
+        service.resolve(e.reviews.get(1).getId(), approve("5.00"));
 
         assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("10.50");
         assertThat(e.dimension.getCategoria()).isEqualTo("Alto");
@@ -364,31 +451,84 @@ class ManualReviewServiceTest {
                 .isEqualByComparingTo(e.result.getPuntajeTotalDirecto());
 
         // Observar una de nuevo revierte su aporte al subtest y recalcula el rango.
-        service.resolve(e.reviews.get(1).getId(), new ManualReviewService.ReviewCommand(null, "revisar", false));
+        service.resolve(e.reviews.get(1).getId(), observe());
 
         assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("5.50");
         assertThat(e.dimension.getCategoria()).isEqualTo("Medio");
     }
 
     @Test
+    void resultadoHistoricoConAporteAutomaticoDelItemManualSeRecalculaDesdeCero() {
+        Escenario e = escenario(1);
+        e.reviewerStubs();
+        subtestSetup(e, "1.00");
+        // Resultado calificado antes del cambio: la fila ya trae el 1.00 automatico mas los 4.00 de la matriz del item
+        // manual (rango Medio). Un delta (+2) lo dejaria en 7.00 (Medio); lo correcto es 1.00 + 2.00 = 3.00 (Bajo).
+        e.dimension.setPuntajeDirecto(new BigDecimal("5.00"));
+        e.dimension.setCategoria("Medio");
+
+        service.resolve(e.reviews.get(0).getId(), approve("2.00"));
+
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("3.00");
+        assertThat(e.dimension.getCategoria()).isEqualTo("Bajo");
+        assertThat(e.dimension.getRangoBaremo()).isNotNull();
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("2.00");
+    }
+
+    @Test
+    void aprobarObservarYAprobarDeNuevoNoAcumulaPuntaje() {
+        Escenario e = escenario(1);
+        e.reviewerStubs();
+        subtestSetup(e, "1.00");
+        // Fila historica con el aporte automatico del item manual incluido.
+        e.dimension.setPuntajeDirecto(new BigDecimal("5.00"));
+
+        service.resolve(e.reviews.get(0).getId(), approve("2.00"));
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("3.00");
+
+        service.resolve(e.reviews.get(0).getId(), observe());
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("1.00");
+        assertThat(e.dimension.getCategoria()).isEqualTo("Bajo");
+
+        service.resolve(e.reviews.get(0).getId(), approve("4.00"));
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("5.00");
+        assertThat(e.dimension.getCategoria()).isEqualTo("Medio");
+
+        service.resolve(e.reviews.get(0).getId(), approve("4.00"));
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("5.00");
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("4.00");
+    }
+
+    @Test
+    void dosRevisionesEnLaMismaDimensionSumanSusPuntajesAdjudicadosSinElAporteAutomaticoDeLosItemsManuales() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+        subtestSetup(e, "1.00");
+        // Fila historica: 1.00 automatico + 4.00 de la matriz del primer item manual.
+        e.dimension.setPuntajeDirecto(new BigDecimal("5.00"));
+
+        service.resolve(e.reviews.get(0).getId(), approve("2.00"));
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("3.00");
+
+        service.resolve(e.reviews.get(1).getId(), approve("1.50"));
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("4.50");
+        assertThat(e.dimension.getCategoria()).isEqualTo("Medio");
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("3.50");
+
+        // Corregir la primera no arrastra la segunda ni duplica nada.
+        service.resolve(e.reviews.get(0).getId(), approve("0.50"));
+        assertThat(e.dimension.getPuntajeDirecto()).isEqualByComparingTo("3.00");
+        assertThat(e.dimension.getCategoria()).isEqualTo("Bajo");
+    }
+
+    @Test
     void resolverCreaLaFilaDelSubtestSiElResultadoNoLaTenia() {
         Escenario e = escenario(1);
         e.reviewerStubs();
-        Subtest subtest = new Subtest();
-        subtest.setId(5L);
-        e.gradingList.get(0).getRespuesta().getItem().setSubtest(subtest);
-        VersionTest version = new VersionTest();
-        version.setId(100L);
-        SesionAplicacion sesion = new SesionAplicacion();
-        sesion.setVersionTest(version);
-        e.result.getIntento().getAsignacion().setSesionAplicacion(sesion);
-        DimensionResultado dimension = new DimensionResultado();
-        dimension.setId(60L);
-        dimension.setSubtest(subtest);
+        DimensionResultado dimension = subtestSetup(e, null);
         when(dimensionResults.findByResultadoId(70L)).thenReturn(List.of());
-        when(dimensionesLookup.findActiveSubtestDimensionsByVersionId(100L)).thenReturn(List.of(dimension));
 
-        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("4.00"), "ok", true));
+        service.resolve(e.reviews.get(0).getId(), approve("4.00"));
 
         org.mockito.ArgumentCaptor<List<ResultadoDimension>> saved = org.mockito.ArgumentCaptor.forClass(List.class);
         verify(dimensionResults).saveAll(saved.capture());

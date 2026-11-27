@@ -15,7 +15,6 @@ import com.uam.psychoform.instrument.model.ReglaCalificacion;
 import com.uam.psychoform.instrument.model.TipoEstrategiaCalificacion;
 import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
-import com.uam.psychoform.instrument.repository.OpcionPuntajeDimensionRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.model.EstadoRevisionManual;
 import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
@@ -51,7 +50,6 @@ public class ClaveSimpleScoringService {
     private final RespuestaItemRepository respuestas;
     private final OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas;
     private final ClaveRespuestaLookupRepository claves;
-    private final OpcionPuntajeDimensionRepository puntajesDimension;
     private final DimensionScoreSupport dimensionScores;
     private final CalificacionRespuestaRepository calificaciones;
     private final ResultadoDimensionRepository resultadosDimension;
@@ -62,8 +60,7 @@ public class ClaveSimpleScoringService {
 
     public ClaveSimpleScoringService(IntentoTestRepository intentos, ResultadoRepository resultados,
             RespuestaItemRepository respuestas, OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas,
-            ClaveRespuestaLookupRepository claves, OpcionPuntajeDimensionRepository puntajesDimension,
-            DimensionScoreSupport dimensionScores,
+            ClaveRespuestaLookupRepository claves, DimensionScoreSupport dimensionScores,
             CalificacionRespuestaRepository calificaciones, ResultadoDimensionRepository resultadosDimension,
             RevisionManualRespuestaRepository revisiones, UsuarioRepository usuarios, CurrentActor currentActor, Clock clock) {
         this.intentos = intentos;
@@ -71,7 +68,6 @@ public class ClaveSimpleScoringService {
         this.respuestas = respuestas;
         this.opcionesSeleccionadas = opcionesSeleccionadas;
         this.claves = claves;
-        this.puntajesDimension = puntajesDimension;
         this.dimensionScores = dimensionScores;
         this.calificaciones = calificaciones;
         this.resultadosDimension = resultadosDimension;
@@ -152,11 +148,8 @@ public class ClaveSimpleScoringService {
                 .map(selection -> selection.getOpcion().getId())
                 .distinct()
                 .toList();
-        Map<Long, List<OpcionPuntajeDimension>> dimensionScoresByOption = selectedOptionIdsForAttempt.isEmpty()
-                ? Map.of()
-                : puntajesDimension.findActiveOfficialByVersionAndOptionIds(version.getId(), selectedOptionIdsForAttempt)
-                        .stream()
-                        .collect(Collectors.groupingBy(row -> row.getOpcion().getId()));
+        Map<Long, List<OpcionPuntajeDimension>> dimensionScoresByOption = dimensionScores.optionScores(version.getId(),
+                selectedOptionIdsForAttempt);
         Map<Long, BigDecimal> directScoresByDimension = new java.util.LinkedHashMap<>();
         Map<Long, DimensionResultado> dimensionsById = new java.util.LinkedHashMap<>();
         Map<Long, DimensionResultado> dimensionsBySubtest = dimensionScores.dimensionsBySubtest(version.getId());
@@ -190,8 +183,7 @@ public class ClaveSimpleScoringService {
                     .map(OpcionSeleccionadaRespuesta::getOpcion)
                     .map(o -> o.getId())
                     .toList();
-            boolean manualFlag = Boolean.TRUE.equals(clave.getRequiereRevisionManual())
-                    || Boolean.TRUE.equals(respuesta.getRequiereRevisionManual());
+            boolean manualFlag = DimensionScoreSupport.requiresManualReview(clave, respuesta);
             RevisionManualRespuesta review = reviewsByAnswer.get(respuesta.getId());
             // Una revision ya resuelta se conserva y su puntaje se aplica al calcular.
             boolean resolved = manualFlag && review != null && review.getEstado() == EstadoRevisionManual.REVISADO
@@ -215,17 +207,11 @@ public class ClaveSimpleScoringService {
                 score = correct ? clave.getPuntaje() : BigDecimal.ZERO;
             }
             if (manualFlag) {
-                // Un item con revision manual no aporta puntaje automatico (matriz de opciones) al subtest: aporta
-                // su puntaje (0 mientras esta pendiente, el asignado al revisarla) a la dimension de su subtest.
-                Long subtestId = respuesta.getItem().getSubtest() == null ? null : respuesta.getItem().getSubtest().getId();
-                DimensionResultado subtestDimension = subtestId == null ? null : dimensionsBySubtest.get(subtestId);
-                if (subtestDimension != null) {
-                    directScoresByDimension.merge(subtestDimension.getId(), score, BigDecimal::add);
-                    dimensionsById.putIfAbsent(subtestDimension.getId(), subtestDimension);
-                }
-            } else {
-                accumulateDimensionScores(selectedOptionIds, dimensionScoresByOption, directScoresByDimension,
+                DimensionScoreSupport.accumulateManual(respuesta, score, dimensionsBySubtest, directScoresByDimension,
                         dimensionsById);
+            } else {
+                DimensionScoreSupport.accumulateAutomatic(selectedOptionIds, dimensionScoresByOption,
+                        directScoresByDimension, dimensionsById);
             }
             if (manualReview && review == null) {
                 createPendingReview(respuesta, clave.getReglaCalificacion());
@@ -263,22 +249,6 @@ public class ClaveSimpleScoringService {
             return java.util.Collections.emptyMap();
         }
         return ClaveCorrectnessEvaluator.groupOptionSetRows(claves.findOptionSetRowsByKeyIds(keyIds));
-    }
-
-    private void accumulateDimensionScores(List<Long> selectedOptionIds,
-            Map<Long, List<OpcionPuntajeDimension>> dimensionScoresByOption,
-            Map<Long, BigDecimal> directScoresByDimension, Map<Long, DimensionResultado> dimensionsById) {
-        if (selectedOptionIds.isEmpty()) {
-            return;
-        }
-        for (Long selectedOptionId : selectedOptionIds) {
-            for (OpcionPuntajeDimension matrixRow : dimensionScoresByOption.getOrDefault(selectedOptionId, List.of())) {
-                Long dimensionId = matrixRow.getDimensionResultado().getId();
-                BigDecimal contribution = matrixRow.getPuntaje().multiply(matrixRow.getPeso());
-                directScoresByDimension.merge(dimensionId, contribution, BigDecimal::add);
-                dimensionsById.putIfAbsent(dimensionId, matrixRow.getDimensionResultado());
-            }
-        }
     }
 
     private void createDimensionResults(Resultado resultado, Long versionTestId,

@@ -74,9 +74,10 @@ class ClaveSimpleScoringServiceTest {
     private final UsuarioRepository usuarios = Mockito.mock(UsuarioRepository.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final DimensionResultadoLookupRepository dimensionesLookup = Mockito.mock(DimensionResultadoLookupRepository.class);
-    private final DimensionScoreSupport dimensionScores = new DimensionScoreSupport(dimensionesLookup, baremos, rangosBaremo);
+    private final DimensionScoreSupport dimensionScores = new DimensionScoreSupport(dimensionesLookup, baremos, rangosBaremo,
+            respuestas, opcionesSeleccionadas, claves, puntajesDimension, revisiones);
     private final ClaveSimpleScoringService service = new ClaveSimpleScoringService(intentos, resultados, respuestas,
-            opcionesSeleccionadas, claves, puntajesDimension, dimensionScores, calificaciones,
+            opcionesSeleccionadas, claves, dimensionScores, calificaciones,
             resultadosDimension, revisiones, usuarios, currentActor,
             Clock.fixed(Instant.parse("2026-06-24T12:00:00Z"), ZoneOffset.UTC));
 

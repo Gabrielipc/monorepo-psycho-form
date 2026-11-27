@@ -27,6 +27,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -124,7 +125,6 @@ public class ManualReviewService {
                 .orElseThrow(() -> new IllegalStateException(
                         "La respuesta no forma parte del resultado calificado del intento"));
         validateScoreAgainstKey(score, grading, answer);
-        BigDecimal previousScore = grading.getPuntajeObtenido() == null ? BigDecimal.ZERO : grading.getPuntajeObtenido();
 
         review.setEstado(command.approved() ? EstadoRevisionManual.REVISADO : EstadoRevisionManual.OBSERVADO);
         review.setPuntajeAsignado(score);
@@ -144,7 +144,7 @@ public class ManualReviewService {
             grading.setRequiereRevisionManual(true);
         }
         gradings.save(grading);
-        recalculateResult(result, answer, grading.getPuntajeObtenido().subtract(previousScore));
+        recalculateResult(result, answer);
         audit.recordTrusted(new AuditLogService.AuditEvent("REVISION_MANUAL_GUARDADA", "revision_manual_respuesta",
                 String.valueOf(reviewId), null,
                 "{\"score\":" + command.score() + ",\"approved\":" + command.approved() + "}", null, null));
@@ -163,11 +163,12 @@ public class ManualReviewService {
     }
 
     /**
-     * Recalcula los totales del resultado a partir de sus calificaciones y de las revisiones del intento, y aplica el
-     * cambio de puntaje de la respuesta resuelta ({@code scoreDelta}) a la dimension de su subtest, recalculando su
-     * baremo/rango. Los puntajes automaticos por dimension (matriz de opciones) no cambian al resolver una revision.
+     * Recalcula los totales del resultado a partir de sus calificaciones y de las revisiones del intento, y recalcula
+     * desde cero el puntaje de la dimension del subtest de la respuesta resuelta (aporte automatico de las respuestas
+     * sin revision manual mas el puntaje de las revisiones REVISADO), con su baremo/rango. Recalcular en lugar de
+     * sumar un delta evita arrastrar el aporte automatico que los resultados historicos dejaron en esa fila.
      */
-    private void recalculateResult(Resultado result, RespuestaItem answer, BigDecimal scoreDelta) {
+    private void recalculateResult(Resultado result, RespuestaItem answer) {
         List<CalificacionRespuesta> gradingList = gradings.findByResultadoId(result.getId());
         BigDecimal total = gradingList.stream()
                 .map(CalificacionRespuesta::getPuntajeObtenido)
@@ -183,16 +184,15 @@ public class ManualReviewService {
         result.setRequiereRevisionManual(pending > 0);
         results.save(result);
         List<ResultadoDimension> dimensions = new ArrayList<>(dimensionResults.findByResultadoId(result.getId()));
-        applySubtestScoreChange(result, dimensions, answer, scoreDelta);
+        recalculateSubtestDimension(result, dimensions, answer);
         dimensions.forEach(d -> d.setRequiereRevisionManual(pending > 0));
         dimensionResults.saveAll(dimensions);
     }
 
-    /** Suma el cambio de puntaje a la dimension del subtest del item (la crea si aun no tenia fila) y recalcula su baremo. */
-    private void applySubtestScoreChange(Resultado result, List<ResultadoDimension> dimensions, RespuestaItem answer,
-            BigDecimal scoreDelta) {
+    /** Recalcula desde cero el puntaje y el baremo de la dimension del subtest del item (crea la fila si faltaba). */
+    private void recalculateSubtestDimension(Resultado result, List<ResultadoDimension> dimensions, RespuestaItem answer) {
         Subtest subtest = answer.getItem().getSubtest();
-        if (scoreDelta.signum() == 0 || subtest == null) {
+        if (subtest == null) {
             return;
         }
         Long versionId = result.getIntento().getAsignacion().getSesionAplicacion().getVersionTest().getId();
@@ -200,19 +200,23 @@ public class ManualReviewService {
         if (dimension == null) {
             return;
         }
+        Map<Long, BigDecimal> directScores = dimensionScores.directScoresByDimension(versionId,
+                result.getIntento().getId());
         ResultadoDimension row = dimensions.stream()
                 .filter(d -> d.getDimensionResultado().getId().equals(dimension.getId()))
                 .findFirst()
                 .orElse(null);
         if (row == null) {
+            if (!directScores.containsKey(dimension.getId())) {
+                return;
+            }
             row = new ResultadoDimension();
             row.setResultado(result);
             row.setDimensionResultado(dimension);
-            row.setPuntajeDirecto(BigDecimal.ZERO);
             row.setRequiereRevisionManual(result.getRequiereRevisionManual());
             dimensions.add(row);
         }
-        row.setPuntajeDirecto(row.getPuntajeDirecto().add(scoreDelta));
+        row.setPuntajeDirecto(directScores.getOrDefault(dimension.getId(), BigDecimal.ZERO));
         dimensionScores.applyBaremo(versionId, List.of(row));
     }
 
