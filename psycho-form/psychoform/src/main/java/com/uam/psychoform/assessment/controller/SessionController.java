@@ -7,6 +7,8 @@ import com.uam.psychoform.dto.ApiResponse;
 import com.uam.psychoform.dto.EntityView;
 import com.uam.psychoform.security.SecurityPermissions;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
@@ -113,11 +115,23 @@ public class SessionController {
         return ApiResponse.ok(null);
     }
 
+    @PostMapping("/{id}/asignaciones/{assignmentId}/regenerar-token")
+    @PreAuthorize(SecurityPermissions.SESION_APLICAR)
+    public ApiResponse<?> regenerateToken(@PathVariable Long id, @PathVariable Long assignmentId,
+            @Valid @RequestBody(required = false) RegenerateTokenRequest request) {
+        Integer ttlHours = request == null ? null : request.ttlHours();
+        return ApiResponse.ok(runtime.regenerateAssignmentToken(id, assignmentId,
+                Duration.ofHours(ttlHours == null ? 8 : ttlHours)));
+    }
+
     @PostMapping("/{id}/incidencias")
     @PreAuthorize(SecurityPermissions.SESION_APLICAR)
     public ApiResponse<Void> incidence(@PathVariable Long id, @Valid @RequestBody IncidenceRequest request) {
         runtime.recordIncidence(id, new ParticipantRuntimeService.IncidenceCommand(request.participantId(), request.text()));
         return ApiResponse.ok(null);
+    }
+
+    public record RegenerateTokenRequest(@Min(1) @Max(72) Integer ttlHours) {
     }
 
     public record IncidenceRequest(UUID participantId, String text) {

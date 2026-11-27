@@ -113,6 +113,43 @@ public class ParticipantRuntimeService {
         return new AssignedParticipant(asignacion.getId(), rawToken, asignacion.getTokenExpiraEn());
     }
 
+    /**
+     * Regenera el token de acceso de una asignacion (B2). El token anterior deja de validar porque cambia el hash;
+     * las sesiones JWT de participante ya emitidas y el intento en curso no se tocan.
+     */
+    @Transactional
+    @PreAuthorize(SecurityPermissions.SESION_APLICAR)
+    public AssignedParticipant regenerateAssignmentToken(Long sessionId, Long assignmentId, Duration tokenTtl) {
+        AsignacionTest asignacion = asignaciones.findByIdForUpdate(assignmentId)
+                .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + assignmentId));
+        SesionAplicacion sesion = asignacion.getSesionAplicacion();
+        if (!Objects.equals(sesion.getId(), sessionId)) {
+            throw new EntityNotFoundException("Asignacion no encontrada en la sesion: " + assignmentId);
+        }
+        if (sesion.getEstado() == EstadoSesionAplicacion.CERRADA
+                || sesion.getEstado() == EstadoSesionAplicacion.CANCELADA) {
+            throw new ParticipantConflictException(ParticipantConflictException.SESION_FINALIZADA,
+                    "La sesion ya finalizo");
+        }
+        if (asignacion.getEstado() == EstadoAsignacion.ANULADO || asignacion.getEstado() == EstadoAsignacion.COMPLETADO) {
+            throw new ParticipantConflictException(ParticipantConflictException.ASIGNACION_NO_OPERABLE,
+                    "La asignacion no permite regenerar el token");
+        }
+        String rawToken = tokenService.generateRawToken();
+        LocalDateTime expiresAt = LocalDateTime.now(clock).plus(tokenTtl);
+        asignacion.setTokenAccesoHash(tokenService.hash(rawToken));
+        asignacion.setTokenExpiraEn(expiresAt);
+        asignacion.setIntentosAcceso(0);
+        if (asignacion.getEstado() == EstadoAsignacion.EXPIRADO) {
+            asignacion.setEstado(EstadoAsignacion.ASIGNADO);
+        }
+        asignaciones.save(asignacion);
+        audit.recordTrusted(new AuditLogService.AuditEvent("ASIGNACION_TOKEN_REGENERADO", "asignacion_test",
+                String.valueOf(assignmentId), null,
+                "{\"sesionId\":" + sessionId + ",\"expiresAt\":\"" + expiresAt + "\"}", null, null));
+        return new AssignedParticipant(asignacion.getId(), rawToken, expiresAt);
+    }
+
     @Transactional
     public IntentoTest startOrResumeAttempt(ParticipantAccessService.ParticipantAccess access, String deviceInfo,
             String ipAddress) {

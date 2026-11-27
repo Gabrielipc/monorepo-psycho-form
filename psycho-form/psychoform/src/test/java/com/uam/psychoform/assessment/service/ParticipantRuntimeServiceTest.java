@@ -305,6 +305,97 @@ class ParticipantRuntimeServiceTest {
                 .hasMessageContaining("Asignacion fuera de la sesion");
     }
 
+    private AsignacionTest asignacionRegenerable(EstadoAsignacion estado, EstadoSesionAplicacion estadoSesion) {
+        AsignacionTest asignacion = new AsignacionTest();
+        asignacion.setId(77L);
+        asignacion.setSesionAplicacion(sesion(estadoSesion));
+        asignacion.setEstado(estado);
+        asignacion.setTokenAccesoHash("hash-viejo");
+        asignacion.setTokenExpiraEn(LocalDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC).minusHours(1));
+        asignacion.setIntentosAcceso(4);
+        when(asignaciones.findByIdForUpdate(77L)).thenReturn(Optional.of(asignacion));
+        when(tokenService.generateRawToken()).thenReturn("token-nuevo");
+        when(tokenService.hash("token-nuevo")).thenReturn("hash-nuevo");
+        return asignacion;
+    }
+
+    @Test
+    void regenerarTokenReemplazaHashFechaIntentosYAuditaSinElToken() {
+        AsignacionTest asignacion = asignacionRegenerable(EstadoAsignacion.EN_PROGRESO, EstadoSesionAplicacion.ABIERTA);
+
+        var result = service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(8));
+
+        LocalDateTime expected = LocalDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC).plusHours(8);
+        assertThat(result.assignmentId()).isEqualTo(77L);
+        assertThat(result.rawToken()).isEqualTo("token-nuevo");
+        assertThat(result.expiresAt()).isEqualTo(expected);
+        assertThat(asignacion.getTokenAccesoHash()).isEqualTo("hash-nuevo");
+        assertThat(asignacion.getTokenExpiraEn()).isEqualTo(expected);
+        assertThat(asignacion.getIntentosAcceso()).isZero();
+        assertThat(asignacion.getEstado()).isEqualTo(EstadoAsignacion.EN_PROGRESO);
+        verify(asignaciones).save(asignacion);
+        Mockito.verifyNoInteractions(intentos);
+        verify(audit).recordTrusted(Mockito.argThat(event -> event.action().equals("ASIGNACION_TOKEN_REGENERADO")
+                && event.entity().equals("asignacion_test")
+                && event.entityId().equals("77")
+                && event.newValuesJson().contains("\"sesionId\":10")
+                && event.newValuesJson().contains("\"expiresAt\"")
+                && !event.newValuesJson().contains("token-nuevo")));
+    }
+
+    @Test
+    void regenerarTokenDeAsignacionExpiradaLaDevuelveAAsignado() {
+        AsignacionTest asignacion = asignacionRegenerable(EstadoAsignacion.EXPIRADO, EstadoSesionAplicacion.ABIERTA);
+
+        service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(2));
+
+        assertThat(asignacion.getEstado()).isEqualTo(EstadoAsignacion.ASIGNADO);
+    }
+
+    @Test
+    void regenerarTokenDeAsignacionDeOtraSesionOInexistenteEs404() {
+        asignacionRegenerable(EstadoAsignacion.ASIGNADO, EstadoSesionAplicacion.ABIERTA);
+        when(asignaciones.findByIdForUpdate(88L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.regenerateAssignmentToken(99L, 77L, Duration.ofHours(8)))
+                .isInstanceOf(jakarta.persistence.EntityNotFoundException.class);
+        assertThatThrownBy(() -> service.regenerateAssignmentToken(10L, 88L, Duration.ofHours(8)))
+                .isInstanceOf(jakarta.persistence.EntityNotFoundException.class);
+        verify(asignaciones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void regenerarTokenConAsignacionCompletadaOAnuladaEs409AsignacionNoOperable() {
+        for (var estado : List.of(EstadoAsignacion.COMPLETADO, EstadoAsignacion.ANULADO)) {
+            AsignacionTest asignacion = asignacionRegenerable(estado, EstadoSesionAplicacion.ABIERTA);
+
+            assertThatThrownBy(() -> service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(8)))
+                    .isInstanceOfSatisfying(ParticipantConflictException.class, e -> assertThat(e.getCode())
+                            .isEqualTo(ParticipantConflictException.ASIGNACION_NO_OPERABLE));
+            assertThat(asignacion.getTokenAccesoHash()).isEqualTo("hash-viejo");
+        }
+        verify(asignaciones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void regenerarTokenConSesionCerradaOCanceladaEs409SesionFinalizada() {
+        for (var estado : List.of(EstadoSesionAplicacion.CERRADA, EstadoSesionAplicacion.CANCELADA)) {
+            asignacionRegenerable(EstadoAsignacion.ASIGNADO, estado);
+
+            assertThatThrownBy(() -> service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(8)))
+                    .isInstanceOfSatisfying(ParticipantConflictException.class, e -> assertThat(e.getCode())
+                            .isEqualTo(ParticipantConflictException.SESION_FINALIZADA));
+        }
+        verify(asignaciones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void regenerarTokenRequierePermisoSesionAplicar() throws Exception {
+        assertThat(ParticipantRuntimeService.class.getMethod("regenerateAssignmentToken", Long.class, Long.class,
+                Duration.class).getAnnotation(PreAuthorize.class).value())
+                .isEqualTo("hasAuthority('PERM_SESION_APLICAR')");
+    }
+
     @Test
     void recordIncidenceRegistraAuditoriaConParticipanteYTextoEscapado() {
         UUID participantId = UUID.randomUUID();
