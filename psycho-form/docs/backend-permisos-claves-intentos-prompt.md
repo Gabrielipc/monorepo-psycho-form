@@ -135,6 +135,14 @@ Al terminar, reportar los archivos modificados, las migraciones creadas y el res
 - Duplicados → 400.
 - Sesión no `PROGRAMADA` → 409.
 
+### Decisión de integración
+El borrado de los subtests omitidos es **opt-in**. El wizard actual (`bfa-digital/src/features/sessions/wizard/components/step-subtests.tsx`) permite desmarcar subtests ya guardados y promete conservarlos; borrarlos por defecto rompería ese contrato vigente. Por eso:
+- `PUT /sesiones/{id}/subtests` **sin parámetro** se comporta como antes de B15: upsert que conserva los subtests omitidos. Conserva las validaciones nuevas (sin `subtestId` ni `order` duplicados, `order` ≥ 1, `timeLimitSeconds` ≥ 1, 409 si la sesión no es `PROGRAMADA`) y el reordenamiento de subtests existentes en un solo PUT (UNIQUE diferida).
+  - **Regla de reubicación:** tras aplicar el upsert de los subtests enviados, los subtests omitidos que se conservan se reubican en las posiciones siguientes a la mayor `order` enviada (`max(order)+1`, `+2`, …), manteniendo su orden relativo actual. Así no chocan con las posiciones asignadas por el cliente (caso del wizard reanudado: A=1 y B=2 guardados, se desmarca A y se envía `[B:1]` → B=1, A=2; con `[C:1, B:2]` y A, B, C guardados → C=1, B=2, A=3). Con lista vacía no se cambia nada. Todo ocurre en la misma transacción (flush antes del commit) y la respuesta incluye los conservados ordenados por `order`.
+- `PUT /sesiones/{id}/subtests?mode=replace` borra los omitidos (con lista vacía, todos) y devuelve las filas efectivas ordenadas por `order`.
+- Cualquier otro valor de `mode` → 400.
+- El frontend debe enviar `mode=replace` solo cuando el wizard se inicializa con los subtests guardados (B4) y avisa al usuario de que guardar reemplaza la configuración.
+
 ## B16. Edición de participantes
 
 ### Problema

@@ -2416,6 +2416,269 @@ COMMENT ON TABLE pausa_sesion IS
 CREATE TRIGGER tg_pausa_sesion_columnas_fijas BEFORE UPDATE ON pausa_sesion
     FOR EACH ROW EXECUTE FUNCTION tg_bfa_columnas_fijas('sesion_aplicacion_id', 'pausado_en', 'pausado_por', 'motivo');
 
+-- migrations/20261126000100_orden_deferrable.sql
+-- Permite intercambiar o rotar posiciones ocupadas dentro de una misma
+-- transaccion, posponiendo la validacion de unicidad hasta el COMMIT.
+DO $$
+DECLARE
+    v_spec RECORD;
+    v_conname TEXT;
+    v_ya_deferrable BOOLEAN;
+BEGIN
+    FOR v_spec IN
+        SELECT *
+        FROM (VALUES
+            ('subtest',        'version_test_id',      'numero_orden', 'uq_subtest_version_orden'),
+            ('item',           'subtest_id',           'numero_orden', 'uq_item_subtest_orden'),
+            ('imagen_item',    'item_id',              'numero_orden', 'uq_imagen_item_orden'),
+            ('opcion_item',    'item_id',              'numero_orden', 'uq_opcion_item_orden'),
+            ('imagen_opcion',  'opcion_id',            'numero_orden', 'uq_imagen_opcion_orden'),
+            ('sesion_subtest', 'sesion_aplicacion_id', 'numero_orden', 'uq_sesion_subtest_orden')
+        ) AS t(tabla, col1, col2, nuevo_nombre)
+    LOOP
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND c.condeferrable
+              AND c.condeferred
+              AND (
+                  SELECT array_agg(a.attname::text ORDER BY u.ord)
+                  FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+              ) = ARRAY[v_spec.col1, v_spec.col2]
+        ) INTO v_ya_deferrable;
+
+        IF v_ya_deferrable THEN
+            CONTINUE;
+        END IF;
+
+        FOR v_conname IN
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND (
+                  c.conname = v_spec.nuevo_nombre
+                  OR (
+                      SELECT array_agg(a.attname::text ORDER BY u.ord)
+                      FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+                  ) = ARRAY[v_spec.col1, v_spec.col2]
+              )
+        LOOP
+            EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', v_spec.tabla, v_conname);
+        END LOOP;
+
+        EXECUTE format(
+            'ALTER TABLE public.%I ADD CONSTRAINT %I UNIQUE (%I, %I) DEFERRABLE INITIALLY DEFERRED',
+            v_spec.tabla,
+            v_spec.nuevo_nombre,
+            v_spec.col1,
+            v_spec.col2
+        );
+    END LOOP;
+END;
+$$;
+
+-- migrations/20261126000200_revision_manual_unica.sql
+-- B23: una sola revision manual por respuesta.
+-- La calificacion crea la revision PENDIENTE de cada respuesta con revision manual y debe ser idempotente
+-- al recalificar. UNIQUE (respuesta_id, regla_calificacion_id) no lo garantiza cuando regla_calificacion_id
+-- es NULL (revisiones creadas a mano), por eso se agrega un indice unico solo por respuesta.
+
+-- Deduplica antes de crear el indice: conserva una fila por respuesta, prefiriendo la ya REVISADO y,
+-- despues, la mas reciente. Las filas de revision_rubrica_respuesta de las eliminadas caen en cascada.
+DELETE FROM revision_manual_respuesta r
+USING (
+    SELECT revision_manual_respuesta_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY respuesta_id
+               ORDER BY (estado = 'REVISADO') DESC, creado_en DESC, revision_manual_respuesta_id DESC
+           ) AS posicion
+    FROM revision_manual_respuesta
+) d
+WHERE r.revision_manual_respuesta_id = d.revision_manual_respuesta_id
+  AND d.posicion > 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_revision_manual_respuesta_unica
+    ON revision_manual_respuesta(respuesta_id);
+
+-- migrations/20261126000300_rbac_catalogo_y_supervision.sql
+-- B12: permisos de solo catalogo (Aplicador) y de supervision (Psicologo/Coordinador).
+-- INSTRUMENTO_CATALOGO_LEER: listar tests, versiones publicadas y subtests para programar sesiones, sin ver items, opciones ni claves.
+-- SESION_LEER: consultar sesiones, asignaciones y su progreso (lectura explicita, sin operar la sesion).
+INSERT INTO permiso (codigo_permiso, descripcion) VALUES
+('INSTRUMENTO_CATALOGO_LEER', 'Listar tests, versiones publicadas y subtests para programar sesiones'),
+('SESION_LEER', 'Consultar sesiones, asignaciones y su progreso')
+ON CONFLICT (codigo_permiso) DO UPDATE SET descripcion = EXCLUDED.descripcion;
+
+INSERT INTO rol_permiso (rol_id, permiso_id)
+SELECT r.rol_id, p.permiso_id
+FROM rol r
+CROSS JOIN permiso p
+WHERE r.nombre_rol = 'ADMINISTRADOR'
+   OR (r.nombre_rol = 'APLICADOR' AND p.codigo_permiso IN (
+        'INSTRUMENTO_CATALOGO_LEER'
+   ))
+   OR (r.nombre_rol = 'PSICOLOGO_COORDINADOR' AND p.codigo_permiso IN (
+        'SESION_LEER', 'PARTICIPANTE_LEER', 'INSTRUMENTO_CATALOGO_LEER'
+   ))
+ON CONFLICT DO NOTHING;
+
+-- migrations/20261126000400_idx_intento_estado_fin.sql
+CREATE INDEX IF NOT EXISTS idx_intento_estado_fin
+    ON intento_test(estado, finalizado_en);
+
+-- migrations/20261126000500_respuesta_rechazada.sql
+-- B17: bitacora de respuestas rechazadas por bulk-sync (TIEMPO_AGOTADO, tipo incompatible, item inexistente...).
+-- Hasta ahora solo se devolvian al participante; con esta tabla el monitor de sesion las muestra al staff.
+-- Una fila por (intento, item, codigo): repetir el mismo rechazo incrementa "veces" (upsert ON CONFLICT en el
+-- backend). La UNIQUE NO es DEFERRABLE porque ON CONFLICT no admite restricciones diferibles. item_id no tiene FK
+-- porque el rechazo puede ser, justamente, por un item inexistente. Idempotente.
+CREATE TABLE IF NOT EXISTS respuesta_rechazada (
+    respuesta_rechazada_id BIGSERIAL PRIMARY KEY,
+    intento_id BIGINT NOT NULL REFERENCES intento_test(intento_id) ON DELETE CASCADE,
+    item_id BIGINT NOT NULL,
+    codigo VARCHAR(60) NOT NULL,
+    rechazado_en TIMESTAMP NOT NULL,
+    veces INTEGER NOT NULL DEFAULT 1,
+    CONSTRAINT uq_respuesta_rechazada UNIQUE (intento_id, item_id, codigo)
+);
+
+-- migrations/20261126000600_recurso_clave_subida.sql
+ALTER TABLE public.recurso_multimedia
+    ADD COLUMN IF NOT EXISTS clave_subida VARCHAR(128);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_recurso_multimedia_clave_subida
+    ON public.recurso_multimedia(clave_subida);
+
+-- migrations/20261126000700_codigos_deferrable.sql
+-- Permite reutilizar codigos en el arbol de configuracion dentro de una misma
+-- transaccion (borrar y crear en el mismo guardado), posponiendo la validacion
+-- de unicidad hasta el COMMIT.
+DO $$
+DECLARE
+    v_spec RECORD;
+    v_conname TEXT;
+    v_ya_deferrable BOOLEAN;
+    v_tiene_fk BOOLEAN;
+BEGIN
+    FOR v_spec IN
+        SELECT *
+        FROM (VALUES
+            ('subtest',                'version_test_id',     'codigo_subtest',   'uq_subtest_version_codigo'),
+            ('dimension_resultado',    'version_test_id',     'codigo_dimension', 'uq_dimension_version_codigo'),
+            ('item',                   'subtest_id',          'codigo_item',      'uq_item_subtest_codigo'),
+            ('opcion_item',            'item_id',             'codigo_opcion',    'uq_opcion_item_codigo'),
+            ('rubrica_evaluacion',     'version_test_id',     'codigo_rubrica',   'uq_rubrica_version_codigo'),
+            ('criterio_rubrica',       'rubrica_id',          'codigo_criterio',  'uq_criterio_rubrica_codigo'),
+            ('nivel_criterio_rubrica', 'criterio_rubrica_id', 'codigo_nivel',     'uq_nivel_criterio_codigo')
+        ) AS t(tabla, col1, col2, nuevo_nombre)
+    LOOP
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND c.condeferrable
+              AND c.condeferred
+              AND (
+                  SELECT array_agg(a.attname::text ORDER BY u.ord)
+                  FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+              ) = ARRAY[v_spec.col1, v_spec.col2]
+        ) INTO v_ya_deferrable;
+
+        IF v_ya_deferrable THEN
+            CONTINUE;
+        END IF;
+
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            JOIN pg_constraint fk ON fk.confrelid = cl.oid AND fk.contype = 'f'
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND (
+                  SELECT array_agg(a.attname::text ORDER BY u.ord)
+                  FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+              ) = ARRAY[v_spec.col1, v_spec.col2]
+              AND fk.confkey = c.conkey
+        ) INTO v_tiene_fk;
+
+        IF v_tiene_fk THEN
+            RAISE NOTICE 'Se omite %.% porque es referenciada por una FK', v_spec.tabla, v_spec.nuevo_nombre;
+            CONTINUE;
+        END IF;
+
+        FOR v_conname IN
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class cl ON cl.oid = c.conrelid
+            JOIN pg_namespace ns ON ns.oid = cl.relnamespace
+            WHERE ns.nspname = 'public'
+              AND cl.relname = v_spec.tabla
+              AND c.contype = 'u'
+              AND (
+                  c.conname = v_spec.nuevo_nombre
+                  OR (
+                      SELECT array_agg(a.attname::text ORDER BY u.ord)
+                      FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum
+                  ) = ARRAY[v_spec.col1, v_spec.col2]
+              )
+        LOOP
+            EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', v_spec.tabla, v_conname);
+        END LOOP;
+
+        EXECUTE format(
+            'ALTER TABLE public.%I ADD CONSTRAINT %I UNIQUE (%I, %I) DEFERRABLE INITIALLY DEFERRED',
+            v_spec.tabla,
+            v_spec.nuevo_nombre,
+            v_spec.col1,
+            v_spec.col2
+        );
+    END LOOP;
+END;
+$$;
+
+-- migrations/20261126000800_backfill_revision_manual.sql
+-- B23: backfill de revisiones manuales de intentos ya calificados.
+-- Los resultados calificados antes de B23 tienen calificaciones pendientes de revision manual
+-- (calificacion_respuesta.requiere_revision_manual = TRUE) sin fila en revision_manual_respuesta, asi que nunca
+-- entraban en la bandeja y la interfaz oculta recalificar. Se crea una revision PENDIENTE por cada respuesta en esa
+-- situacion. Idempotente: no toca respuestas que ya tienen revision (en cualquier estado) y es compatible con el
+-- indice unico ux_revision_manual_respuesta_unica (una revision por respuesta).
+INSERT INTO revision_manual_respuesta (respuesta_id, regla_calificacion_id, estado, creado_en)
+SELECT DISTINCT ON (c.respuesta_id)
+       c.respuesta_id,
+       c.regla_calificacion_id,
+       'PENDIENTE',
+       CURRENT_TIMESTAMP
+FROM calificacion_respuesta c
+WHERE c.requiere_revision_manual = TRUE
+  AND NOT EXISTS (
+      SELECT 1
+      FROM revision_manual_respuesta rm
+      WHERE rm.respuesta_id = c.respuesta_id
+  )
+ORDER BY c.respuesta_id, c.calificacion_respuesta_id DESC;
+
 -- seed.sql
 -- Seed data is managed by versioned migrations in supabase/migrations.
 

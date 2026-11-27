@@ -132,16 +132,17 @@ class ParticipantAccessServiceTest {
     }
 
     @Test
-    void validateRuntimeWriteExpiraAsignacionSiTokenYaVencio() {
+    void validateRuntimeWriteNoComprueбaElVencimientoDelEnlaceConUnJwtVigente() {
+        // B2: el enlace regenerado (TTL 1 h) ya vencio dos horas despues, pero el JWT emitido antes sigue vigente.
         AsignacionTest asignacion = asignacionAbierta();
-        asignacion.setTokenExpiraEn(LocalDateTime.ofInstant(CLOCK.instant().minusSeconds(1), ZoneOffset.UTC));
+        asignacion.setTokenExpiraEn(LocalDateTime.ofInstant(CLOCK.instant().minusSeconds(3600), ZoneOffset.UTC));
+        asignacion.setIntentosAcceso(0);
         when(asignaciones.findByIdForUpdate(77L)).thenReturn(Optional.of(asignacion));
 
-        assertThatThrownBy(() -> service.validateRuntimeWrite(
-                new ParticipantAccessService.ParticipantAccess(77L, asignacion.getParticipante().getId())))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Token expirado");
-        assertThat(asignacion.getEstado()).isEqualTo(EstadoAsignacion.EXPIRADO);
+        ParticipantAccessService.ParticipantAccess access = service.validateRuntimeWrite(accessOf(asignacion));
+
+        assertThat(access.assignmentId()).isEqualTo(77L);
+        assertThat(asignacion.getEstado()).isEqualTo(EstadoAsignacion.ASIGNADO);
     }
 
     private ParticipantAccessService.ParticipantAccess accessOf(AsignacionTest a) {
@@ -188,10 +189,11 @@ class ParticipantAccessServiceTest {
     }
 
     @Test
-    void tokenExpiradoLanzaTokenExpirado() {
+    void lecturaConEnlaceVencidoYJwtVigenteNoLanzaTokenExpirado() {
         AsignacionTest a = conEstado(EstadoSesionAplicacion.ABIERTA);
         a.setTokenExpiraEn(LocalDateTime.ofInstant(CLOCK.instant().minusSeconds(1), ZoneOffset.UTC));
-        assertThat(codeOf(() -> service.validateRuntimeRead(accessOf(a)))).isEqualTo("TOKEN_EXPIRADO");
+        assertThat(service.validateRuntimeRead(accessOf(a)).assignmentId()).isEqualTo(77L);
+        assertThat(a.getEstado()).isEqualTo(EstadoAsignacion.ASIGNADO);
     }
 
     @Test

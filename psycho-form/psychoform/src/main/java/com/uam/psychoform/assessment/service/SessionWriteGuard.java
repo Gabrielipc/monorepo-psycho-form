@@ -42,6 +42,14 @@ public class SessionWriteGuard {
         }
     }
 
+    /** Lectura del estado final de una asignacion COMPLETADO: tambien se admite con la sesion CERRADA o CANCELADA. */
+    public static void checkReadableCompleted(EstadoSesionAplicacion estado) {
+        if (estado == EstadoSesionAplicacion.CERRADA || estado == EstadoSesionAplicacion.CANCELADA) {
+            return;
+        }
+        checkReadable(estado);
+    }
+
     public static void checkWritable(EstadoSesionAplicacion estado) {
         checkReadable(estado);
         if (estado == EstadoSesionAplicacion.PAUSADA) {

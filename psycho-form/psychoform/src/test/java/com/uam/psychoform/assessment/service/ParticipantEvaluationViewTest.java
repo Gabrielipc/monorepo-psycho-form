@@ -77,6 +77,7 @@ class ParticipantEvaluationViewTest {
         assertThat(payload.sessionName()).isEqualTo("Sesion UAM");
         assertThat(payload.sessionStatus()).isEqualTo("ABIERTA");
         assertThat(payload.attemptStatus()).isEqualTo("EN_PROGRESO");
+        assertThat(payload.finishedAt()).isNull();
         assertThat(payload.subtests()).extracting(ParticipantEvaluationView.SubtestPayload::status)
                 .containsExactly("COMPLETADO", "NO_INICIADO");
         verify(items).findBySubtestIdInAndEstadoOrderBySubtestAndItemOrder(List.of(10L, 20L), EstadoGeneral.ACTIVO);
@@ -118,6 +119,41 @@ class ParticipantEvaluationViewTest {
             assertThat(subtest.timeLimitSeconds()).isEqualTo(600);
         });
         Mockito.verify(pausas).findBySesionAplicacionIdOrderByPausadoEnAsc(30L);
+    }
+
+    @Test
+    void asignacionCompletadaExponeEstadoFinalSinItemsNiConsultarlos() {
+        AsignacionTest asignacion = asignacion();
+        asignacion.setEstado(EstadoAsignacion.COMPLETADO);
+        asignacion.getSesionAplicacion().setEstado(EstadoSesionAplicacion.CERRADA);
+        IntentoTest intento = new IntentoTest();
+        intento.setId(77L);
+        intento.setEstado(EstadoIntento.COMPLETADO);
+        intento.setFinalizadoEn(java.time.LocalDateTime.now(CLOCK).minusMinutes(2));
+        Subtest memoria = subtest(10L, "MEM", "Memoria");
+        SesionSubtest sesionMemoria = sesionSubtest(memoria, 1);
+        IntentoSubtest intentoMemoria = new IntentoSubtest();
+        intentoMemoria.setSubtest(memoria);
+        intentoMemoria.setSesionSubtest(sesionMemoria);
+        intentoMemoria.setEstado(EstadoIntento.COMPLETADO);
+        intentoMemoria.setIniciadoEn(java.time.LocalDateTime.now(CLOCK).minusMinutes(5));
+        when(asignaciones.findByIdWithSessionAndParticipant(50L)).thenReturn(Optional.of(asignacion));
+        when(intentos.findByAsignacionId(50L)).thenReturn(Optional.of(intento));
+        when(intentoSubtests.findByIntentoIdWithSubtest(77L)).thenReturn(List.of(intentoMemoria));
+        when(sesionSubtests.findBySesionAplicacionIdWithSubtestOrderByNumeroOrdenAsc(30L))
+                .thenReturn(List.of(sesionMemoria));
+
+        ParticipantEvaluationView.EvaluationPayload payload = view.getEvaluationPayload(50L);
+
+        assertThat(payload.attemptStatus()).isEqualTo("COMPLETADO");
+        assertThat(payload.sessionStatus()).isEqualTo("CERRADA");
+        assertThat(payload.finishedAt()).isEqualTo(java.time.OffsetDateTime.parse("2026-06-24T11:58:00Z"));
+        assertThat(payload.subtests()).singleElement().satisfies(subtest -> {
+            assertThat(subtest.status()).isEqualTo("COMPLETADO");
+            assertThat(subtest.startedAt()).isNotNull();
+            assertThat(subtest.items()).isEmpty();
+        });
+        Mockito.verifyNoInteractions(items, opciones, imagenesItem, imagenesOpcion);
     }
 
     private static AsignacionTest asignacion() {

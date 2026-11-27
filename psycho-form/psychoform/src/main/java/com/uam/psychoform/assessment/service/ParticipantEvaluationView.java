@@ -2,6 +2,7 @@ package com.uam.psychoform.assessment.service;
 
 import com.uam.psychoform.assessment.model.AsignacionTest;
 import com.uam.psychoform.assessment.model.IntentoSubtest;
+import com.uam.psychoform.assessment.model.EstadoAsignacion;
 import com.uam.psychoform.assessment.model.EstadoSesionAplicacion;
 import com.uam.psychoform.assessment.model.PausaSesion;
 import com.uam.psychoform.assessment.model.IntentoTest;
@@ -72,8 +73,11 @@ public class ParticipantEvaluationView {
         List<PausaSesion> pausas = timing.loadPausas(sesionId);
         List<SesionSubtest> sessionSubtests = sesionSubtests
                 .findBySesionAplicacionIdWithSubtestOrderByNumeroOrdenAsc(asignacion.getSesionAplicacion().getId());
-        List<Long> subtestIds = sessionSubtests.stream().map(sesionSubtest -> sesionSubtest.getSubtest().getId())
-                .toList();
+        // Una asignacion COMPLETADO es de solo lectura: se devuelve el estado final sin items ni opciones.
+        boolean completed = asignacion.getEstado() == EstadoAsignacion.COMPLETADO;
+        List<Long> subtestIds = completed
+                ? List.of()
+                : sessionSubtests.stream().map(sesionSubtest -> sesionSubtest.getSubtest().getId()).toList();
         Map<Long, List<Item>> itemsBySubtest = subtestIds.isEmpty()
                 ? Map.of()
                 : items.findBySubtestIdInAndEstadoOrderBySubtestAndItemOrder(subtestIds, EstadoGeneral.ACTIVO)
@@ -102,7 +106,9 @@ public class ParticipantEvaluationView {
         return new EvaluationPayload(attemptId, asignacion.getId(), asignacion.getSesionAplicacion().getId(),
                 participantDisplayName(asignacion), asignacion.getSesionAplicacion().getNombreSesion(),
                 sessionState.name(), timing.toOffsetDateTime(asignacion.getSesionAplicacion().getPausadoEn()),
-                attemptStatus, subtests);
+                attemptStatus, subtests,
+                completed ? intento.map(existing -> timing.toOffsetDateTime(existing.getFinalizadoEn())).orElse(null)
+                        : null);
     }
 
     public SubtestPayload getScopedSubtestPayload(ParticipantAccessService.ParticipantAccess access, long attemptId,
@@ -182,8 +188,16 @@ public class ParticipantEvaluationView {
         return (asignacion.getParticipante().getNombres() + " " + asignacion.getParticipante().getApellidos()).trim();
     }
 
+    /** {@code finishedAt}: fin del intento; solo se informa cuando la asignacion esta COMPLETADO (B21). */
     public record EvaluationPayload(Long id, long assignmentId, long sessionId, String participantDisplayName,
-            String sessionName, String sessionStatus, java.time.OffsetDateTime pausedAt, String attemptStatus, List<SubtestPayload> subtests) {
+            String sessionName, String sessionStatus, java.time.OffsetDateTime pausedAt, String attemptStatus, List<SubtestPayload> subtests,
+            java.time.OffsetDateTime finishedAt) {
+        public EvaluationPayload(Long id, long assignmentId, long sessionId, String participantDisplayName,
+                String sessionName, String sessionStatus, java.time.OffsetDateTime pausedAt, String attemptStatus,
+                List<SubtestPayload> subtests) {
+            this(id, assignmentId, sessionId, participantDisplayName, sessionName, sessionStatus, pausedAt,
+                    attemptStatus, subtests, null);
+        }
     }
 
     public record SubtestPayload(long subtestId, String code, String name, String instructions, int order,

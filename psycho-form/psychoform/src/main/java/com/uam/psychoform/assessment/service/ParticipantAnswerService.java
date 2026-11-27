@@ -10,6 +10,7 @@ import com.uam.psychoform.assessment.repository.IntentoSubtestRepository;
 import com.uam.psychoform.assessment.repository.IntentoTestRepository;
 import com.uam.psychoform.assessment.repository.OpcionSeleccionadaRespuestaRepository;
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
+import com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository;
 import com.uam.psychoform.instrument.model.Item;
 import com.uam.psychoform.instrument.model.OpcionItem;
 import com.uam.psychoform.instrument.model.TipoRespuesta;
@@ -57,12 +58,14 @@ public class ParticipantAnswerService {
     private final SessionWriteGuard sessionWriteGuard;
     private final IntentoSubtestRepository intentoSubtests;
     private final SubtestClosingService closing;
+    private final RespuestaRechazadaRepository rechazos;
     private final Clock clock;
 
     public ParticipantAnswerService(IntentoTestRepository intentos, RespuestaItemRepository respuestas,
             OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas, ItemLookupRepository items,
             OpcionItemLookupRepository opciones, SessionWriteGuard sessionWriteGuard,
-            IntentoSubtestRepository intentoSubtests, SubtestClosingService closing, Clock clock) {
+            IntentoSubtestRepository intentoSubtests, SubtestClosingService closing,
+            RespuestaRechazadaRepository rechazos, Clock clock) {
         this.intentos = intentos;
         this.respuestas = respuestas;
         this.opcionesSeleccionadas = opcionesSeleccionadas;
@@ -71,6 +74,7 @@ public class ParticipantAnswerService {
         this.sessionWriteGuard = sessionWriteGuard;
         this.intentoSubtests = intentoSubtests;
         this.closing = closing;
+        this.rechazos = rechazos;
         this.clock = clock;
     }
 
@@ -98,43 +102,58 @@ public class ParticipantAnswerService {
     @Transactional
     public List<BulkSyncResult> bulkSyncAnswers(ParticipantAccessService.ParticipantAccess access,
             BulkSyncAnswersCommand command) {
-        return command.answers().stream().map(answer -> {
-            if (answer.entradaInvalida()) {
-                try {
-                    // Solo las validaciones de intento y sesion (sin item): una sesion pausada sigue abortando el lote.
-                    prepare(access, SaveAnswerCommand.invalida(answer.intentoId(), null));
-                } catch (ItemNoEncontradoException esperado) {
-                    // prepare siempre termina aqui con itemId nulo cuando intento y sesion son operables.
-                }
-                return BulkSyncResult.rechazada(answer.itemId(), RESPUESTA_INVALIDA);
-            }
-            Contexto contexto;
+        return command.answers().stream().map(answer -> registrarSiRechazada(command.intentoId(),
+                procesarRespuesta(access, answer))).toList();
+    }
+
+    /**
+     * B17: el rechazo no aborta el lote, pero queda en la bitacora (upsert, misma transaccion) para que el monitor
+     * de sesion lo muestre. Sin itemId no hay fila posible (item_id NOT NULL): solo se informa al participante.
+     */
+    private BulkSyncResult registrarSiRechazada(Long intentoId, BulkSyncResult resultado) {
+        if (RESULTADO_RECHAZADA.equals(resultado.status()) && resultado.itemId() != null) {
+            rechazos.registrar(intentoId, resultado.itemId(), resultado.code(), LocalDateTime.now(clock));
+        }
+        return resultado;
+    }
+
+    private BulkSyncResult procesarRespuesta(ParticipantAccessService.ParticipantAccess access,
+            SaveAnswerCommand answer) {
+        if (answer.entradaInvalida()) {
             try {
-                contexto = prepare(access, answer);
-            } catch (ItemNoEncontradoException ex) {
-                return BulkSyncResult.rechazada(answer.itemId(), ITEM_NO_ENCONTRADO);
+                // Solo las validaciones de intento y sesion (sin item): una sesion pausada sigue abortando el lote.
+                prepare(access, SaveAnswerCommand.invalida(answer.intentoId(), null));
+            } catch (ItemNoEncontradoException esperado) {
+                // prepare siempre termina aqui con itemId nulo cuando intento y sesion son operables.
             }
-            return switch (contexto.estado()) {
-                case NO_INICIADO -> BulkSyncResult.rechazada(answer.itemId(), SUBTEST_NO_INICIADO);
-                case FINALIZADO -> BulkSyncResult.rechazada(answer.itemId(), SUBTEST_FINALIZADO);
-                case TIEMPO_AGOTADO -> BulkSyncResult.rechazada(answer.itemId(), ParticipantConflictException.TIEMPO_AGOTADO);
-                case PERMITIDA -> {
-                    List<OpcionItem> selected;
-                    try {
-                        selected = validarOpciones(contexto.item(), answer.selectedOptionIds());
-                    } catch (EntityNotFoundException | IllegalArgumentException ex) {
-                        yield BulkSyncResult.rechazada(answer.itemId(), OPCION_INVALIDA);
-                    }
-                    try {
-                        validarAlmacenamiento(contexto.item(), answer, selected.size());
-                    } catch (RespuestaInvalidaException ex) {
-                        yield BulkSyncResult.rechazada(answer.itemId(), RESPUESTA_INVALIDA);
-                    }
-                    RespuestaItem guardada = persist(contexto, answer, selected);
-                    yield new BulkSyncResult(answer.itemId(), RESULTADO_GUARDADA, null, guardada.getId());
+            return BulkSyncResult.rechazada(answer.itemId(), RESPUESTA_INVALIDA);
+        }
+        Contexto contexto;
+        try {
+            contexto = prepare(access, answer);
+        } catch (ItemNoEncontradoException ex) {
+            return BulkSyncResult.rechazada(answer.itemId(), ITEM_NO_ENCONTRADO);
+        }
+        return switch (contexto.estado()) {
+            case NO_INICIADO -> BulkSyncResult.rechazada(answer.itemId(), SUBTEST_NO_INICIADO);
+            case FINALIZADO -> BulkSyncResult.rechazada(answer.itemId(), SUBTEST_FINALIZADO);
+            case TIEMPO_AGOTADO -> BulkSyncResult.rechazada(answer.itemId(), ParticipantConflictException.TIEMPO_AGOTADO);
+            case PERMITIDA -> {
+                List<OpcionItem> selected;
+                try {
+                    selected = validarOpciones(contexto.item(), answer.selectedOptionIds());
+                } catch (EntityNotFoundException | IllegalArgumentException ex) {
+                    yield BulkSyncResult.rechazada(answer.itemId(), OPCION_INVALIDA);
                 }
-            };
-        }).toList();
+                try {
+                    validarAlmacenamiento(contexto.item(), answer, selected.size());
+                } catch (RespuestaInvalidaException ex) {
+                    yield BulkSyncResult.rechazada(answer.itemId(), RESPUESTA_INVALIDA);
+                }
+                RespuestaItem guardada = persist(contexto, answer, selected);
+                yield new BulkSyncResult(answer.itemId(), RESULTADO_GUARDADA, null, guardada.getId());
+            }
+        };
     }
 
     private Contexto prepare(ParticipantAccessService.ParticipantAccess access, SaveAnswerCommand command) {

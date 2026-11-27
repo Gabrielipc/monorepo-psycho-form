@@ -61,6 +61,10 @@ class ParticipantRuntimeServiceTest {
     private final ParticipantTokenService tokenService = Mockito.mock(ParticipantTokenService.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final AuditLogService audit = Mockito.mock(AuditLogService.class);
+    private final com.uam.psychoform.audit.repository.AuditoriaRepository auditorias =
+            Mockito.mock(com.uam.psychoform.audit.repository.AuditoriaRepository.class);
+    private final com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository rechazos =
+            Mockito.mock(com.uam.psychoform.assessment.repository.RespuestaRechazadaRepository.class);
     private final PausaSesionRepository pausas = Mockito.mock(PausaSesionRepository.class);
     private final jakarta.persistence.EntityManager entityManager = Mockito.mock(jakarta.persistence.EntityManager.class);
     private final SessionWriteGuard guard = new SessionWriteGuard(entityManager);
@@ -72,7 +76,7 @@ class ParticipantRuntimeServiceTest {
     private final SubtestClosingService closing = new SubtestClosingService(intentoSubtests, respuestas, items, timing);
     private final ParticipantRuntimeService service = new ParticipantRuntimeService(sesiones, sesionSubtests,
             asignaciones, intentos, intentoSubtests, participantes, usuarios, tokenService, currentActor, audit, CLOCK,
-            guard, closing);
+            guard, closing, auditorias, rechazos);
 
     @BeforeEach
     void abiertaPorDefecto() {
@@ -305,10 +309,103 @@ class ParticipantRuntimeServiceTest {
                 .hasMessageContaining("Asignacion fuera de la sesion");
     }
 
+    private AsignacionTest asignacionRegenerable(EstadoAsignacion estado, EstadoSesionAplicacion estadoSesion) {
+        AsignacionTest asignacion = new AsignacionTest();
+        asignacion.setId(77L);
+        asignacion.setSesionAplicacion(sesion(estadoSesion));
+        asignacion.setEstado(estado);
+        asignacion.setTokenAccesoHash("hash-viejo");
+        asignacion.setTokenExpiraEn(LocalDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC).minusHours(1));
+        asignacion.setIntentosAcceso(4);
+        when(asignaciones.findByIdForUpdate(77L)).thenReturn(Optional.of(asignacion));
+        when(tokenService.generateRawToken()).thenReturn("token-nuevo");
+        when(tokenService.hash("token-nuevo")).thenReturn("hash-nuevo");
+        return asignacion;
+    }
+
+    @Test
+    void regenerarTokenReemplazaHashFechaIntentosYAuditaSinElToken() {
+        AsignacionTest asignacion = asignacionRegenerable(EstadoAsignacion.EN_PROGRESO, EstadoSesionAplicacion.ABIERTA);
+
+        var result = service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(8));
+
+        LocalDateTime expected = LocalDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC).plusHours(8);
+        assertThat(result.assignmentId()).isEqualTo(77L);
+        assertThat(result.rawToken()).isEqualTo("token-nuevo");
+        assertThat(result.expiresAt()).isEqualTo(expected);
+        assertThat(asignacion.getTokenAccesoHash()).isEqualTo("hash-nuevo");
+        assertThat(asignacion.getTokenExpiraEn()).isEqualTo(expected);
+        assertThat(asignacion.getIntentosAcceso()).isZero();
+        assertThat(asignacion.getEstado()).isEqualTo(EstadoAsignacion.EN_PROGRESO);
+        verify(asignaciones).save(asignacion);
+        Mockito.verifyNoInteractions(intentos);
+        verify(audit).recordTrusted(Mockito.argThat(event -> event.action().equals("ASIGNACION_TOKEN_REGENERADO")
+                && event.entity().equals("asignacion_test")
+                && event.entityId().equals("77")
+                && event.newValuesJson().contains("\"sesionId\":10")
+                && event.newValuesJson().contains("\"expiresAt\"")
+                && !event.newValuesJson().contains("token-nuevo")));
+    }
+
+    @Test
+    void regenerarTokenDeAsignacionExpiradaLaDevuelveAAsignado() {
+        AsignacionTest asignacion = asignacionRegenerable(EstadoAsignacion.EXPIRADO, EstadoSesionAplicacion.ABIERTA);
+
+        service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(2));
+
+        assertThat(asignacion.getEstado()).isEqualTo(EstadoAsignacion.ASIGNADO);
+    }
+
+    @Test
+    void regenerarTokenDeAsignacionDeOtraSesionOInexistenteEs404() {
+        asignacionRegenerable(EstadoAsignacion.ASIGNADO, EstadoSesionAplicacion.ABIERTA);
+        when(asignaciones.findByIdForUpdate(88L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.regenerateAssignmentToken(99L, 77L, Duration.ofHours(8)))
+                .isInstanceOf(jakarta.persistence.EntityNotFoundException.class);
+        assertThatThrownBy(() -> service.regenerateAssignmentToken(10L, 88L, Duration.ofHours(8)))
+                .isInstanceOf(jakarta.persistence.EntityNotFoundException.class);
+        verify(asignaciones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void regenerarTokenConAsignacionCompletadaOAnuladaEs409AsignacionNoOperable() {
+        for (var estado : List.of(EstadoAsignacion.COMPLETADO, EstadoAsignacion.ANULADO)) {
+            AsignacionTest asignacion = asignacionRegenerable(estado, EstadoSesionAplicacion.ABIERTA);
+
+            assertThatThrownBy(() -> service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(8)))
+                    .isInstanceOfSatisfying(ParticipantConflictException.class, e -> assertThat(e.getCode())
+                            .isEqualTo(ParticipantConflictException.ASIGNACION_NO_OPERABLE));
+            assertThat(asignacion.getTokenAccesoHash()).isEqualTo("hash-viejo");
+        }
+        verify(asignaciones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void regenerarTokenConSesionCerradaOCanceladaEs409SesionFinalizada() {
+        for (var estado : List.of(EstadoSesionAplicacion.CERRADA, EstadoSesionAplicacion.CANCELADA)) {
+            asignacionRegenerable(EstadoAsignacion.ASIGNADO, estado);
+
+            assertThatThrownBy(() -> service.regenerateAssignmentToken(10L, 77L, Duration.ofHours(8)))
+                    .isInstanceOfSatisfying(ParticipantConflictException.class, e -> assertThat(e.getCode())
+                            .isEqualTo(ParticipantConflictException.SESION_FINALIZADA));
+        }
+        verify(asignaciones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void regenerarTokenRequierePermisoSesionAplicar() throws Exception {
+        assertThat(ParticipantRuntimeService.class.getMethod("regenerateAssignmentToken", Long.class, Long.class,
+                Duration.class).getAnnotation(PreAuthorize.class).value())
+                .isEqualTo("hasAuthority('PERM_SESION_APLICAR')");
+    }
+
     @Test
     void recordIncidenceRegistraAuditoriaConParticipanteYTextoEscapado() {
         UUID participantId = UUID.randomUUID();
         when(sesiones.existsById(10L)).thenReturn(true);
+        when(asignaciones.findBySesionAplicacionIdAndParticipanteId(10L, participantId))
+                .thenReturn(Optional.of(new AsignacionTest()));
 
         service.recordIncidence(10L, new ParticipantRuntimeService.IncidenceCommand(participantId, "Dijo \"alto\""));
 
@@ -348,6 +445,47 @@ class ParticipantRuntimeServiceTest {
         });
         verify(intentos, never()).findByAsignacionId(77L);
         verify(sesionSubtests).countBySesionAplicacionId(10L);
+    }
+
+    @Test
+    void getAssignmentsForSessionExponeEstadosCrudosYCorrigeAnuladaConIntentoCompletadoYTokenVencido() {
+        LocalDateTime now = LocalDateTime.ofInstant(CLOCK.instant(), ZoneOffset.UTC);
+        AsignacionTest anulada = asignacionConParticipante(1L, EstadoAsignacion.ANULADO, now.plusHours(1));
+        AsignacionTest vencida = asignacionConParticipante(2L, EstadoAsignacion.ASIGNADO, now.minusHours(1));
+        AsignacionTest sinIniciar = asignacionConParticipante(3L, EstadoAsignacion.ASIGNADO, now.plusHours(1));
+        IntentoTest completado = new IntentoTest();
+        completado.setId(91L);
+        completado.setEstado(EstadoIntento.COMPLETADO);
+        completado.setAsignacion(anulada);
+        when(asignaciones.findBySesionAplicacionIdWithParticipante(10L))
+                .thenReturn(List.of(anulada, vencida, sinIniciar));
+        when(intentos.findByAsignacionSesionAplicacionIdWithUltimoSubtest(10L)).thenReturn(List.of(completado));
+        when(intentoSubtests.countCompletedByIntentoIds(List.of(91L))).thenReturn(List.of());
+
+        var result = service.getAssignmentsForSession(10L);
+
+        assertThat(result).extracting(r -> r.assignmentId(), r -> r.status(), r -> r.state(),
+                r -> r.assignmentStatus(), r -> r.attemptStatus())
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(1L, "REVOCADO", "completado", "ANULADO", "COMPLETADO"),
+                        org.assertj.core.groups.Tuple.tuple(2L, "VENCIDO", "no-iniciado", "ASIGNADO", null),
+                        org.assertj.core.groups.Tuple.tuple(3L, "GENERADO", "no-iniciado", "ASIGNADO", null));
+        assertThat(result).allSatisfy(row -> {
+            assertThat(row.rejectedAnswersCount()).isZero();
+            assertThat(row.rejectedAnswers()).isEmpty();
+        });
+    }
+
+    private static AsignacionTest asignacionConParticipante(long id, EstadoAsignacion estado,
+            LocalDateTime tokenExpiraEn) {
+        AsignacionTest asignacion = new AsignacionTest();
+        asignacion.setId(id);
+        asignacion.setEstado(estado);
+        asignacion.setParticipante(participante(UUID.randomUUID()));
+        asignacion.getParticipante().setNombres("N" + id);
+        asignacion.getParticipante().setApellidos("A" + id);
+        asignacion.setTokenExpiraEn(tokenExpiraEn);
+        return asignacion;
     }
 
     private static ParticipantAccessService.ParticipantAccess access(long assignmentId) {
