@@ -32,6 +32,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mockito;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
+import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
+import software.amazon.awssdk.services.s3.model.NoSuchBucketException;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
@@ -160,12 +162,34 @@ class ReportRegistryServiceTest {
                 .isInstanceOf(EntityNotFoundException.class)
                 .hasMessage("Reporte no encontrado: 20");
 
-        Mockito.doThrow(S3Exception.builder().statusCode(404).message("Not Found").build())
+        Mockito.doThrow(S3Exception.builder().statusCode(404).message("Not Found")
+                .awsErrorDetails(AwsErrorDetails.builder().errorCode("NoSuchKey").build()).build())
                 .when(storage).getObject("reports/missing.pdf");
 
         assertThatThrownBy(() -> service.downloadReport(20L))
                 .isInstanceOf(EntityNotFoundException.class)
                 .hasMessage("Reporte no encontrado: 20");
+    }
+
+    @Test
+    void downloadReportConNoSuchBucketOOtro404SinCodigoNoSuchKeyEsStorageUnavailable() {
+        ReporteGenerado report = report(22L, FormatoReporte.PDF, "reports/ok.pdf");
+        when(repository.findById(22L)).thenReturn(Optional.of(report));
+        Mockito.doThrow(NoSuchBucketException.builder().message("The specified bucket does not exist").build())
+                .when(storage).getObject("reports/ok.pdf");
+
+        assertThatThrownBy(() -> service.downloadReport(22L)).isInstanceOf(StorageUnavailableException.class);
+
+        Mockito.doThrow(S3Exception.builder().statusCode(404).message("Not Found")
+                .awsErrorDetails(AwsErrorDetails.builder().errorCode("NoSuchBucket").build()).build())
+                .when(storage).getObject("reports/ok.pdf");
+
+        assertThatThrownBy(() -> service.downloadReport(22L)).isInstanceOf(StorageUnavailableException.class);
+
+        Mockito.doThrow(S3Exception.builder().statusCode(404).message("Not Found").build())
+                .when(storage).getObject("reports/ok.pdf");
+
+        assertThatThrownBy(() -> service.downloadReport(22L)).isInstanceOf(StorageUnavailableException.class);
     }
 
     @Test

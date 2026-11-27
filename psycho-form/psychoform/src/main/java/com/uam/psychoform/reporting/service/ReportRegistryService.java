@@ -127,7 +127,10 @@ public class ReportRegistryService {
         } catch (NoSuchKeyException | EntityNotFoundException ex) {
             throw reportNotFound(id);
         } catch (S3Exception ex) {
-            if (ex.statusCode() == 404) {
+            // Solo un objeto ausente es 404. Otros 404 de S3 (p. ej. NoSuchBucket) son un fallo de configuracion o
+            // de infraestructura del almacenamiento y responden 503.
+            if (ex.statusCode() == 404 && ex.awsErrorDetails() != null
+                    && "NoSuchKey".equals(ex.awsErrorDetails().errorCode())) {
                 throw reportNotFound(id);
             }
             throw new StorageUnavailableException("Almacenamiento no disponible", ex);
