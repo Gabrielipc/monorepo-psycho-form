@@ -103,11 +103,16 @@ public class SessionController {
 
     @PutMapping("/{id}/subtests")
     @PreAuthorize(SecurityPermissions.SESION_CREAR)
-    public ApiResponse<?> subtests(@PathVariable Long id, @Valid @RequestBody List<SessionSubtestRequest> request) {
+    public ApiResponse<?> subtests(@PathVariable Long id, @RequestParam(required = false) String mode,
+            @Valid @RequestBody List<SessionSubtestRequest> request) {
+        // Sin mode: upsert sin borrar los omitidos. mode=replace: reemplaza la configuracion completa.
+        if (mode != null && !"replace".equals(mode)) {
+            throw new IllegalArgumentException("Valor de mode no soportado: " + mode);
+        }
         return ApiResponse.ok(EntityView.of(management.replaceSubtests(id, request.stream()
                 .map(r -> new SessionManagementService.SessionSubtestCommand(r.subtestId(), r.order(),
                         r.timeLimitSeconds(), r.randomizeItems(), r.randomizeOptions()))
-                .toList())));
+                .toList(), "replace".equals(mode))));
     }
 
     @PostMapping("/{id}/asignaciones")

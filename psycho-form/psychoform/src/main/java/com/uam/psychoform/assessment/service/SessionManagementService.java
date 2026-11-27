@@ -216,20 +216,25 @@ public class SessionManagementService {
 
     @Transactional
     @PreAuthorize(SecurityPermissions.SESION_CREAR)
-    public List<SesionSubtest> replaceSubtests(long sessionId, List<SessionSubtestCommand> commands) {
+    public List<SesionSubtest> replaceSubtests(long sessionId, List<SessionSubtestCommand> commands,
+            boolean deleteOmitted) {
         validateSubtestCommands(commands);
         SesionAplicacion session = sesiones.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new EntityNotFoundException("Sesion no encontrada: " + sessionId));
         if (session.getEstado() != EstadoSesionAplicacion.PROGRAMADA) {
             throw new IllegalStateException("Solo se configuran subtests en sesiones programadas");
         }
-        if (commands.isEmpty()) {
-            sesionSubtests.deleteBySesionAplicacionId(sessionId);
-        } else {
-            List<Long> subtestIds = commands.stream().map(SessionSubtestCommand::subtestId).toList();
-            sesionSubtests.deleteBySesionAplicacionIdAndSubtestIdNotIn(sessionId, subtestIds);
+        // Sin mode=replace el PUT es un upsert que conserva los subtests omitidos (contrato previo a B15, del que
+        // depende el wizard actual). Con mode=replace los omitidos se eliminan (con lista vacia, todos).
+        if (deleteOmitted) {
+            if (commands.isEmpty()) {
+                sesionSubtests.deleteBySesionAplicacionId(sessionId);
+            } else {
+                List<Long> subtestIds = commands.stream().map(SessionSubtestCommand::subtestId).toList();
+                sesionSubtests.deleteBySesionAplicacionIdAndSubtestIdNotIn(sessionId, subtestIds);
+            }
+            entityManager.flush();
         }
-        entityManager.flush();
         return commands.stream()
                 .map(command -> saveSubtest(session, command))
                 .sorted(Comparator.comparing(SesionSubtest::getNumeroOrden))

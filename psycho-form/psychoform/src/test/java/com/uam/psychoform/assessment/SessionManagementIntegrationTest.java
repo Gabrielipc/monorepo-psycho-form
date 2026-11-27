@@ -65,7 +65,7 @@ class SessionManagementIntegrationTest {
     }
 
     @Test
-    void replaceSubtestsOmittingSavedOneDeletesItAndReturnsSortedResult() throws Exception {
+    void replaceModeOmittingSavedOneDeletesItAndReturnsSortedResult() throws Exception {
         scenario = seed("PROGRAMADA");
 
         List<SessionSubtestRequest> initial = List.of(
@@ -87,7 +87,7 @@ class SessionManagementIntegrationTest {
         List<SessionSubtestRequest> replaced = List.of(
                 new SessionSubtestRequest(scenario.subtestIds().get(1), 1, 450, false, false));
 
-        mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+        mvc.perform(put("/sesiones/{id}/subtests?mode=replace", scenario.sessionId())
                 .header("Authorization", bearer("SESION_CREAR"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(JSON.writeValueAsString(replaced)))
@@ -104,7 +104,7 @@ class SessionManagementIntegrationTest {
     }
 
     @Test
-    void replaceSubtestsWithEmptyListDeletesAllSavedSubtests() throws Exception {
+    void replaceModeWithEmptyListDeletesAllSavedSubtests() throws Exception {
         scenario = seed("PROGRAMADA");
 
         List<SessionSubtestRequest> initial = List.of(
@@ -117,7 +117,7 @@ class SessionManagementIntegrationTest {
                 .content(JSON.writeValueAsString(initial)))
                 .andExpect(status().isOk());
 
-        mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+        mvc.perform(put("/sesiones/{id}/subtests?mode=replace", scenario.sessionId())
                 .header("Authorization", bearer("SESION_CREAR"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("[]"))
@@ -126,6 +126,65 @@ class SessionManagementIntegrationTest {
                 .andExpect(jsonPath("$.data").isArray())
                 .andExpect(jsonPath("$.data.length()").value(0));
 
+        Integer count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
+                Integer.class, scenario.sessionId());
+        assertThat(count).isZero();
+    }
+
+    @Test
+    void withoutModeOmittingSavedSubtestKeepsItAndUpsertsTheRest() throws Exception {
+        scenario = seed("PROGRAMADA");
+
+        List<SessionSubtestRequest> initial = List.of(
+                new SessionSubtestRequest(scenario.subtestIds().get(0), 1, 300, false, false),
+                new SessionSubtestRequest(scenario.subtestIds().get(1), 2, 600, false, false));
+        mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+                .header("Authorization", bearer("SESION_CREAR"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(initial)))
+                .andExpect(status().isOk());
+
+        List<SessionSubtestRequest> partial = List.of(
+                new SessionSubtestRequest(scenario.subtestIds().get(1), 2, 450, false, false));
+        mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+                .header("Authorization", bearer("SESION_CREAR"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(partial)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].tiempoLimiteSegundos").value(450));
+
+        Integer count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
+                Integer.class, scenario.sessionId());
+        assertThat(count).isEqualTo(2);
+        assertThat(subtestOrderInSession(scenario.subtestIds().get(0))).isEqualTo(1);
+
+        mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+                .header("Authorization", bearer("SESION_CREAR"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("[]"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+        count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
+                Integer.class, scenario.sessionId());
+        assertThat(count).isEqualTo(2);
+    }
+
+    @Test
+    void unknownModeReturns400AndChangesNothing() throws Exception {
+        scenario = seed("PROGRAMADA");
+
+        List<SessionSubtestRequest> payload = List.of(
+                new SessionSubtestRequest(scenario.subtestIds().get(0), 1, 300, false, false));
+        for (String mode : List.of("foo", "REPLACE", "")) {
+            mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+                    .param("mode", mode)
+                    .header("Authorization", bearer("SESION_CREAR"))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(JSON.writeValueAsString(payload)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("BAD_REQUEST"));
+        }
         Integer count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
                 Integer.class, scenario.sessionId());
         assertThat(count).isZero();
