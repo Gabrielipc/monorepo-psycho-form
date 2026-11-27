@@ -14,7 +14,10 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
@@ -82,12 +85,48 @@ public class SessionManagementService {
     @Transactional
     @PreAuthorize(SecurityPermissions.SESION_CREAR)
     public List<SesionSubtest> replaceSubtests(long sessionId, List<SessionSubtestCommand> commands) {
+        validateSubtestCommands(commands);
         SesionAplicacion session = sesiones.findByIdForUpdate(sessionId)
                 .orElseThrow(() -> new EntityNotFoundException("Sesion no encontrada: " + sessionId));
         if (session.getEstado() != EstadoSesionAplicacion.PROGRAMADA) {
             throw new IllegalStateException("Solo se configuran subtests en sesiones programadas");
         }
-        return commands.stream().map(command -> saveSubtest(session, command)).toList();
+        if (commands.isEmpty()) {
+            sesionSubtests.deleteBySesionAplicacionId(sessionId);
+        } else {
+            List<Long> subtestIds = commands.stream().map(SessionSubtestCommand::subtestId).toList();
+            sesionSubtests.deleteBySesionAplicacionIdAndSubtestIdNotIn(sessionId, subtestIds);
+        }
+        entityManager.flush();
+        return commands.stream()
+                .map(command -> saveSubtest(session, command))
+                .sorted(Comparator.comparing(SesionSubtest::getNumeroOrden))
+                .toList();
+    }
+
+    private void validateSubtestCommands(List<SessionSubtestCommand> commands) {
+        if (commands == null) {
+            throw new IllegalArgumentException("La lista de subtests es obligatoria");
+        }
+        Set<Long> seenSubtestIds = new HashSet<>();
+        Set<Integer> seenOrders = new HashSet<>();
+        for (SessionSubtestCommand command : commands) {
+            if (command == null || command.subtestId() == null) {
+                throw new IllegalArgumentException("El subtestId es obligatorio");
+            }
+            if (command.order() == null || command.order() < 1) {
+                throw new IllegalArgumentException("El orden del subtest debe ser mayor o igual a 1");
+            }
+            if (command.timeLimitSeconds() != null && command.timeLimitSeconds() < 1) {
+                throw new IllegalArgumentException("El tiempo limite debe ser mayor o igual a 1");
+            }
+            if (!seenSubtestIds.add(command.subtestId())) {
+                throw new IllegalArgumentException("Subtest duplicado: " + command.subtestId());
+            }
+            if (!seenOrders.add(command.order())) {
+                throw new IllegalArgumentException("Orden de subtest duplicado: " + command.order());
+            }
+        }
     }
 
     private SesionSubtest saveSubtest(SesionAplicacion session, SessionSubtestCommand command) {
