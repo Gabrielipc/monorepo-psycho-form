@@ -16,7 +16,12 @@ import com.uam.psychoform.assessment.model.SesionAplicacion;
 import com.uam.psychoform.assessment.repository.IntentoTestRepository;
 import com.uam.psychoform.assessment.repository.OpcionSeleccionadaRespuestaRepository;
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
+import com.uam.psychoform.instrument.model.Baremo;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
+import com.uam.psychoform.instrument.model.DimensionResultado;
+import com.uam.psychoform.instrument.model.RangoBaremo;
+import com.uam.psychoform.instrument.model.Subtest;
+import com.uam.psychoform.scoring.model.ResultadoDimension;
 import com.uam.psychoform.instrument.model.EstadoConfiguracion;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
 import com.uam.psychoform.instrument.model.EstrategiaCalificacion;
@@ -28,6 +33,7 @@ import com.uam.psychoform.instrument.model.TipoRespuesta;
 import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.BaremoRepository;
+import com.uam.psychoform.instrument.repository.DimensionResultadoLookupRepository;
 import com.uam.psychoform.instrument.repository.OpcionPuntajeDimensionRepository;
 import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
@@ -67,8 +73,10 @@ class ClaveSimpleScoringServiceTest {
     private final RevisionManualRespuestaRepository revisiones = Mockito.mock(RevisionManualRespuestaRepository.class);
     private final UsuarioRepository usuarios = Mockito.mock(UsuarioRepository.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
+    private final DimensionResultadoLookupRepository dimensionesLookup = Mockito.mock(DimensionResultadoLookupRepository.class);
+    private final DimensionScoreSupport dimensionScores = new DimensionScoreSupport(dimensionesLookup, baremos, rangosBaremo);
     private final ClaveSimpleScoringService service = new ClaveSimpleScoringService(intentos, resultados, respuestas,
-            opcionesSeleccionadas, claves, puntajesDimension, baremos, rangosBaremo, calificaciones,
+            opcionesSeleccionadas, claves, puntajesDimension, dimensionScores, calificaciones,
             resultadosDimension, revisiones, usuarios, currentActor,
             Clock.fixed(Instant.parse("2026-06-24T12:00:00Z"), ZoneOffset.UTC));
 
@@ -363,6 +371,61 @@ class ClaveSimpleScoringServiceTest {
         verify(revisiones, times(1)).save(Mockito.argThat(review -> review.getRespuesta() == r2));
         verify(calificaciones).save(Mockito.argThat(c -> c.getRespuesta() == r1 && !c.getRequiereRevisionManual()
                 && c.getEsCorrecta() && c.getPuntajeObtenido().compareTo(new BigDecimal("4.50")) == 0));
+    }
+
+    // ---- B23: puntaje y baremo por subtest con revision manual ----
+
+    @Test
+    void itemsConRevisionManualNoAportanPuntajeAutomaticoAlSubtestYSeAplicaElDeLaRevisionResuelta() {
+        Subtest subtest = new Subtest();
+        subtest.setId(5L);
+        DimensionResultado dimension = new DimensionResultado();
+        dimension.setId(60L);
+        dimension.setSubtest(subtest);
+        Baremo baremo = new Baremo();
+        baremo.setId(70L);
+        baremo.setDimensionResultado(dimension);
+        when(dimensionesLookup.findActiveSubtestDimensionsByVersionId(100L)).thenReturn(List.of(dimension));
+        when(baremos.findPreferredDimensionBaremos(Mockito.eq(100L), Mockito.anyCollection())).thenReturn(List.of(baremo));
+        when(rangosBaremo.findByBaremoIdInOrderByBaremoAndRangeOrder(List.of(70L)))
+                .thenReturn(List.of(rango(baremo, "0", "2", "Bajo"), rango(baremo, "2.01", "10", "Alto")));
+        RespuestaItem r1 = respuestaManual(31L, 11L);
+        RespuestaItem r2 = respuestaManual(32L, 12L);
+        r1.getItem().setSubtest(subtest);
+        r2.getItem().setSubtest(subtest);
+        prepararIntento(List.of(r1, r2), List.of(claveManual(r1.getItem(), "5.00"), claveManual(r2.getItem(), "3.00")));
+
+        // Ambas pendientes: el subtest tiene fila con 0 (no se suma nada automatico) y el rango del 0.
+        service.scoreAttempt(7L);
+
+        org.mockito.ArgumentCaptor<ResultadoDimension> pendiente = org.mockito.ArgumentCaptor
+                .forClass(ResultadoDimension.class);
+        verify(resultadosDimension).save(pendiente.capture());
+        assertThat(pendiente.getValue().getPuntajeDirecto()).isEqualByComparingTo("0");
+        assertThat(pendiente.getValue().getCategoria()).isEqualTo("Bajo");
+        assertThat(pendiente.getValue().getRequiereRevisionManual()).isTrue();
+
+        // Una ya revisada con 4.50: el subtest suma 4.50 y cae en el rango Alto.
+        Mockito.clearInvocations(resultadosDimension);
+        when(revisiones.findByRespuestaIdIn(List.of(31L, 32L)))
+                .thenReturn(List.of(revision(r1, EstadoRevisionManual.REVISADO, new BigDecimal("4.50"))));
+        service.scoreAttempt(7L);
+
+        org.mockito.ArgumentCaptor<ResultadoDimension> parcial = org.mockito.ArgumentCaptor
+                .forClass(ResultadoDimension.class);
+        verify(resultadosDimension).save(parcial.capture());
+        assertThat(parcial.getValue().getPuntajeDirecto()).isEqualByComparingTo("4.50");
+        assertThat(parcial.getValue().getCategoria()).isEqualTo("Alto");
+    }
+
+    private static RangoBaremo rango(Baremo baremo, String min, String max, String categoria) {
+        RangoBaremo rango = new RangoBaremo();
+        rango.setBaremo(baremo);
+        rango.setPuntajeMinimo(new BigDecimal(min));
+        rango.setPuntajeMaximo(new BigDecimal(max));
+        rango.setCategoria(categoria);
+        rango.setPercentil(new BigDecimal("50"));
+        return rango;
     }
 
     private void prepararIntento(List<RespuestaItem> respuestasIntento, List<ClaveRespuesta> clavesIntento) {

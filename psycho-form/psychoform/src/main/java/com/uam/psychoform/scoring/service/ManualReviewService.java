@@ -5,6 +5,8 @@ import com.uam.psychoform.assessment.repository.IntentoTestRepository;
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
 import com.uam.psychoform.audit.service.AuditLogService;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
+import com.uam.psychoform.instrument.model.DimensionResultado;
+import com.uam.psychoform.instrument.model.Subtest;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.model.EstadoRevisionManual;
@@ -23,6 +25,7 @@ import jakarta.persistence.EntityNotFoundException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
@@ -41,6 +44,7 @@ public class ManualReviewService {
     private final CalificacionRespuestaRepository gradings;
     private final ResultadoDimensionRepository dimensionResults;
     private final ClaveRespuestaLookupRepository keys;
+    private final DimensionScoreSupport dimensionScores;
     private final UsuarioRepository users;
     private final CurrentActor currentActor;
     private final AuditLogService audit;
@@ -49,7 +53,8 @@ public class ManualReviewService {
     public ManualReviewService(RevisionManualRespuestaRepository reviews, RespuestaItemRepository answers,
             IntentoTestRepository attempts, ResultadoRepository results, CalificacionRespuestaRepository gradings,
             ResultadoDimensionRepository dimensionResults, ClaveRespuestaLookupRepository keys,
-            UsuarioRepository users, CurrentActor currentActor, AuditLogService audit, Clock clock) {
+            DimensionScoreSupport dimensionScores, UsuarioRepository users, CurrentActor currentActor,
+            AuditLogService audit, Clock clock) {
         this.reviews = reviews;
         this.answers = answers;
         this.attempts = attempts;
@@ -57,6 +62,7 @@ public class ManualReviewService {
         this.gradings = gradings;
         this.dimensionResults = dimensionResults;
         this.keys = keys;
+        this.dimensionScores = dimensionScores;
         this.users = users;
         this.currentActor = currentActor;
         this.audit = audit;
@@ -118,6 +124,7 @@ public class ManualReviewService {
                 .orElseThrow(() -> new IllegalStateException(
                         "La respuesta no forma parte del resultado calificado del intento"));
         validateScoreAgainstKey(score, grading, answer);
+        BigDecimal previousScore = grading.getPuntajeObtenido() == null ? BigDecimal.ZERO : grading.getPuntajeObtenido();
 
         review.setEstado(command.approved() ? EstadoRevisionManual.REVISADO : EstadoRevisionManual.OBSERVADO);
         review.setPuntajeAsignado(score);
@@ -137,7 +144,7 @@ public class ManualReviewService {
             grading.setRequiereRevisionManual(true);
         }
         gradings.save(grading);
-        recalculateResult(result);
+        recalculateResult(result, answer, grading.getPuntajeObtenido().subtract(previousScore));
         audit.recordTrusted(new AuditLogService.AuditEvent("REVISION_MANUAL_GUARDADA", "revision_manual_respuesta",
                 String.valueOf(reviewId), null,
                 "{\"score\":" + command.score() + ",\"approved\":" + command.approved() + "}", null, null));
@@ -156,12 +163,11 @@ public class ManualReviewService {
     }
 
     /**
-     * Recalcula los totales del resultado a partir de sus calificaciones y de las revisiones del intento. Los
-     * puntajes por dimension/baremo salen de la matriz de opciones (no del puntaje de cada item), asi que no cambian
-     * al resolver una revision; solo se actualiza su marca de revision pendiente. El resultado no tiene puntaje por
-     * subtest.
+     * Recalcula los totales del resultado a partir de sus calificaciones y de las revisiones del intento, y aplica el
+     * cambio de puntaje de la respuesta resuelta ({@code scoreDelta}) a la dimension de su subtest, recalculando su
+     * baremo/rango. Los puntajes automaticos por dimension (matriz de opciones) no cambian al resolver una revision.
      */
-    private void recalculateResult(Resultado result) {
+    private void recalculateResult(Resultado result, RespuestaItem answer, BigDecimal scoreDelta) {
         List<CalificacionRespuesta> gradingList = gradings.findByResultadoId(result.getId());
         BigDecimal total = gradingList.stream()
                 .map(CalificacionRespuesta::getPuntajeObtenido)
@@ -176,9 +182,38 @@ public class ManualReviewService {
         result.setCantidadPendientesRevision(pending);
         result.setRequiereRevisionManual(pending > 0);
         results.save(result);
-        List<ResultadoDimension> dimensions = dimensionResults.findByResultadoId(result.getId());
+        List<ResultadoDimension> dimensions = new ArrayList<>(dimensionResults.findByResultadoId(result.getId()));
+        applySubtestScoreChange(result, dimensions, answer, scoreDelta);
         dimensions.forEach(d -> d.setRequiereRevisionManual(pending > 0));
         dimensionResults.saveAll(dimensions);
+    }
+
+    /** Suma el cambio de puntaje a la dimension del subtest del item (la crea si aun no tenia fila) y recalcula su baremo. */
+    private void applySubtestScoreChange(Resultado result, List<ResultadoDimension> dimensions, RespuestaItem answer,
+            BigDecimal scoreDelta) {
+        Subtest subtest = answer.getItem().getSubtest();
+        if (scoreDelta.signum() == 0 || subtest == null) {
+            return;
+        }
+        Long versionId = result.getIntento().getAsignacion().getSesionAplicacion().getVersionTest().getId();
+        DimensionResultado dimension = dimensionScores.dimensionsBySubtest(versionId).get(subtest.getId());
+        if (dimension == null) {
+            return;
+        }
+        ResultadoDimension row = dimensions.stream()
+                .filter(d -> d.getDimensionResultado().getId().equals(dimension.getId()))
+                .findFirst()
+                .orElse(null);
+        if (row == null) {
+            row = new ResultadoDimension();
+            row.setResultado(result);
+            row.setDimensionResultado(dimension);
+            row.setPuntajeDirecto(BigDecimal.ZERO);
+            row.setRequiereRevisionManual(result.getRequiereRevisionManual());
+            dimensions.add(row);
+        }
+        row.setPuntajeDirecto(row.getPuntajeDirecto().add(scoreDelta));
+        dimensionScores.applyBaremo(versionId, List.of(row));
     }
 
     private PendingReviewView toView(RevisionManualRespuesta review) {

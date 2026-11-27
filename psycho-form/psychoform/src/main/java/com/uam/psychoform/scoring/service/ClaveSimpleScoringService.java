@@ -10,16 +10,12 @@ import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
 import com.uam.psychoform.instrument.model.DimensionResultado;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
-import com.uam.psychoform.instrument.model.Baremo;
 import com.uam.psychoform.instrument.model.OpcionPuntajeDimension;
 import com.uam.psychoform.instrument.model.ReglaCalificacion;
-import com.uam.psychoform.instrument.model.RangoBaremo;
 import com.uam.psychoform.instrument.model.TipoEstrategiaCalificacion;
 import com.uam.psychoform.instrument.model.VersionTest;
-import com.uam.psychoform.instrument.repository.BaremoRepository;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.OpcionPuntajeDimensionRepository;
-import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.model.EstadoRevisionManual;
 import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
@@ -56,8 +52,7 @@ public class ClaveSimpleScoringService {
     private final OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas;
     private final ClaveRespuestaLookupRepository claves;
     private final OpcionPuntajeDimensionRepository puntajesDimension;
-    private final BaremoRepository baremos;
-    private final RangoBaremoRepository rangosBaremo;
+    private final DimensionScoreSupport dimensionScores;
     private final CalificacionRespuestaRepository calificaciones;
     private final ResultadoDimensionRepository resultadosDimension;
     private final RevisionManualRespuestaRepository revisiones;
@@ -68,7 +63,7 @@ public class ClaveSimpleScoringService {
     public ClaveSimpleScoringService(IntentoTestRepository intentos, ResultadoRepository resultados,
             RespuestaItemRepository respuestas, OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas,
             ClaveRespuestaLookupRepository claves, OpcionPuntajeDimensionRepository puntajesDimension,
-            BaremoRepository baremos, RangoBaremoRepository rangosBaremo,
+            DimensionScoreSupport dimensionScores,
             CalificacionRespuestaRepository calificaciones, ResultadoDimensionRepository resultadosDimension,
             RevisionManualRespuestaRepository revisiones, UsuarioRepository usuarios, CurrentActor currentActor, Clock clock) {
         this.intentos = intentos;
@@ -77,8 +72,7 @@ public class ClaveSimpleScoringService {
         this.opcionesSeleccionadas = opcionesSeleccionadas;
         this.claves = claves;
         this.puntajesDimension = puntajesDimension;
-        this.baremos = baremos;
-        this.rangosBaremo = rangosBaremo;
+        this.dimensionScores = dimensionScores;
         this.calificaciones = calificaciones;
         this.resultadosDimension = resultadosDimension;
         this.revisiones = revisiones;
@@ -165,6 +159,7 @@ public class ClaveSimpleScoringService {
                         .collect(Collectors.groupingBy(row -> row.getOpcion().getId()));
         Map<Long, BigDecimal> directScoresByDimension = new java.util.LinkedHashMap<>();
         Map<Long, DimensionResultado> dimensionsById = new java.util.LinkedHashMap<>();
+        Map<Long, DimensionResultado> dimensionsBySubtest = dimensionScores.dimensionsBySubtest(version.getId());
         Map<Long, RevisionManualRespuesta> reviewsByAnswer = answerIds.isEmpty()
                 ? Map.of()
                 : revisiones.findByRespuestaIdIn(answerIds).stream()
@@ -195,7 +190,6 @@ public class ClaveSimpleScoringService {
                     .map(OpcionSeleccionadaRespuesta::getOpcion)
                     .map(o -> o.getId())
                     .toList();
-            accumulateDimensionScores(selectedOptionIds, dimensionScoresByOption, directScoresByDimension, dimensionsById);
             boolean manualFlag = Boolean.TRUE.equals(clave.getRequiereRevisionManual())
                     || Boolean.TRUE.equals(respuesta.getRequiereRevisionManual());
             RevisionManualRespuesta review = reviewsByAnswer.get(respuesta.getId());
@@ -219,6 +213,19 @@ public class ClaveSimpleScoringService {
                         optionSetsByKey.get(clave.getId()), respuesta.getRespuestaTextoAbierto(),
                         respuesta.getRespuestaNumerica());
                 score = correct ? clave.getPuntaje() : BigDecimal.ZERO;
+            }
+            if (manualFlag) {
+                // Un item con revision manual no aporta puntaje automatico (matriz de opciones) al subtest: aporta
+                // su puntaje (0 mientras esta pendiente, el asignado al revisarla) a la dimension de su subtest.
+                Long subtestId = respuesta.getItem().getSubtest() == null ? null : respuesta.getItem().getSubtest().getId();
+                DimensionResultado subtestDimension = subtestId == null ? null : dimensionsBySubtest.get(subtestId);
+                if (subtestDimension != null) {
+                    directScoresByDimension.merge(subtestDimension.getId(), score, BigDecimal::add);
+                    dimensionsById.putIfAbsent(subtestDimension.getId(), subtestDimension);
+                }
+            } else {
+                accumulateDimensionScores(selectedOptionIds, dimensionScoresByOption, directScoresByDimension,
+                        dimensionsById);
             }
             if (manualReview && review == null) {
                 createPendingReview(respuesta, clave.getReglaCalificacion());
@@ -276,51 +283,16 @@ public class ClaveSimpleScoringService {
 
     private void createDimensionResults(Resultado resultado, Long versionTestId,
             Map<Long, BigDecimal> directScoresByDimension, Map<Long, DimensionResultado> dimensionsById) {
-        Map<Long, Baremo> preferredBaremosByDimension = directScoresByDimension.isEmpty()
-                ? Map.of()
-                : baremos.findPreferredDimensionBaremos(versionTestId, directScoresByDimension.keySet()).stream()
-                        .collect(Collectors.toMap(baremo -> baremo.getDimensionResultado().getId(), Function.identity(),
-                                (first, second) -> first));
-        List<Long> baremoIds = preferredBaremosByDimension.values().stream()
-                .map(Baremo::getId)
-                .toList();
-        Map<Long, List<RangoBaremo>> rangesByBaremo = baremoIds.isEmpty()
-                ? Map.of()
-                : rangosBaremo.findByBaremoIdInOrderByBaremoAndRangeOrder(baremoIds).stream()
-                        .collect(Collectors.groupingBy(range -> range.getBaremo().getId()));
+        List<ResultadoDimension> rows = new java.util.ArrayList<>();
         for (Map.Entry<Long, BigDecimal> entry : directScoresByDimension.entrySet()) {
             ResultadoDimension dimensionResult = new ResultadoDimension();
             dimensionResult.setResultado(resultado);
             dimensionResult.setDimensionResultado(dimensionsById.get(entry.getKey()));
             dimensionResult.setPuntajeDirecto(entry.getValue());
             dimensionResult.setRequiereRevisionManual(resultado.getRequiereRevisionManual());
-
-            Baremo baremo = preferredBaremosByDimension.get(entry.getKey());
-            if (baremo != null) {
-                dimensionResult.setBaremo(baremo);
-                RangoBaremo matchingRange = matchingRange(rangesByBaremo.getOrDefault(baremo.getId(), List.of()),
-                        entry.getValue());
-                if (matchingRange != null) {
-                    applyRange(dimensionResult, matchingRange);
-                }
-            }
-            resultadosDimension.save(dimensionResult);
+            rows.add(dimensionResult);
         }
-    }
-
-    private static RangoBaremo matchingRange(List<RangoBaremo> ranges, BigDecimal score) {
-        return ranges.stream()
-                .filter(range -> range.getPuntajeMinimo().compareTo(score) <= 0
-                        && range.getPuntajeMaximo().compareTo(score) >= 0)
-                .findFirst()
-                .orElse(null);
-    }
-
-    private static void applyRange(ResultadoDimension dimensionResult, RangoBaremo range) {
-        dimensionResult.setRangoBaremo(range);
-        dimensionResult.setCategoria(range.getCategoria());
-        dimensionResult.setPercentil(range.getPercentil());
-        dimensionResult.setInterpretacion(range.getInterpretacion());
-        dimensionResult.setPuntajeTransformado(range.getPercentil());
+        dimensionScores.applyBaremo(versionTestId, rows);
+        rows.forEach(resultadosDimension::save);
     }
 }
