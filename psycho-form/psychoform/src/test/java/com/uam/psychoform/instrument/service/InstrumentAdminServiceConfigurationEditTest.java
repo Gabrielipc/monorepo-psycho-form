@@ -318,6 +318,247 @@ class InstrumentAdminServiceConfigurationEditTest {
         Mockito.verify(em, Mockito.never()).persist(Mockito.any());
     }
 
+    @Test
+    void saveConfigurationDeletesExistingAnswerKeyBelongingToItem() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+        Subtest subtest = subtestWithVersion(20L, 99L, EstadoVersionTest.BORRADOR);
+        when(em.find(Subtest.class, 20L)).thenReturn(subtest);
+        Item item = itemWithVersion(30L, 99L, EstadoVersionTest.BORRADOR);
+        item.setSubtest(subtest);
+        when(em.find(Item.class, 30L)).thenReturn(item);
+        ClaveRespuesta key = new ClaveRespuesta();
+        key.setId(50L);
+        key.setItem(item);
+        when(em.find(ClaveRespuesta.class, 50L)).thenReturn(key);
+
+        VersionConfigurationRequest.AnswerKeyDraft deletedKey = new VersionConfigurationRequest.AnswerKeyDraft(
+                50L, "tmp-key-1", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                null, null, null, null, null, null, null, null);
+        VersionConfigurationRequest.ItemDraft itemDraft = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30", null, VersionConfigurationRequest.DraftStatus.UPDATED,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.TEXTO_ABIERTO, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(), deletedKey);
+        VersionConfigurationRequest.SubtestDraft subtestDraft = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(itemDraft));
+
+        service.saveConfiguration(99L, new VersionConfigurationRequest(List.of(subtestDraft)));
+
+        Mockito.verify(em).remove(key);
+    }
+
+    @Test
+    void saveConfigurationIgnoresDeletedAnswerKeyWithoutId() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+        Subtest subtest = subtestWithVersion(20L, 99L, EstadoVersionTest.BORRADOR);
+        when(em.find(Subtest.class, 20L)).thenReturn(subtest);
+        Item item = itemWithVersion(30L, 99L, EstadoVersionTest.BORRADOR);
+        item.setSubtest(subtest);
+        when(em.find(Item.class, 30L)).thenReturn(item);
+
+        VersionConfigurationRequest.AnswerKeyDraft deletedKey = new VersionConfigurationRequest.AnswerKeyDraft(
+                null, "tmp-key-1", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                null, null, null, null, null, null, null, null);
+        VersionConfigurationRequest.ItemDraft itemDraft = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30", null, VersionConfigurationRequest.DraftStatus.UPDATED,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.TEXTO_ABIERTO, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(), deletedKey);
+        VersionConfigurationRequest.SubtestDraft subtestDraft = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(itemDraft));
+
+        service.saveConfiguration(99L, new VersionConfigurationRequest(List.of(subtestDraft)));
+
+        Mockito.verify(em, Mockito.never()).find(Mockito.eq(ClaveRespuesta.class), Mockito.any());
+        Mockito.verify(em, Mockito.never()).remove(Mockito.any());
+    }
+
+    @Test
+    void saveConfigurationRejectsDeletingAnswerKeyOfAnotherItemWithConflict() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+        Subtest subtest = subtestWithVersion(20L, 99L, EstadoVersionTest.BORRADOR);
+        when(em.find(Subtest.class, 20L)).thenReturn(subtest);
+        Item item = itemWithVersion(30L, 99L, EstadoVersionTest.BORRADOR);
+        item.setSubtest(subtest);
+        when(em.find(Item.class, 30L)).thenReturn(item);
+        Item otherItem = itemWithVersion(31L, 99L, EstadoVersionTest.BORRADOR);
+        ClaveRespuesta otherKey = new ClaveRespuesta();
+        otherKey.setId(50L);
+        otherKey.setItem(otherItem);
+        when(em.find(ClaveRespuesta.class, 50L)).thenReturn(otherKey);
+
+        VersionConfigurationRequest.AnswerKeyDraft deletedKey = new VersionConfigurationRequest.AnswerKeyDraft(
+                50L, "tmp-key-1", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                null, null, null, null, null, null, null, null);
+        VersionConfigurationRequest.ItemDraft itemDraft = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30", null, VersionConfigurationRequest.DraftStatus.UPDATED,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.TEXTO_ABIERTO, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(), deletedKey);
+        VersionConfigurationRequest.SubtestDraft subtestDraft = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(itemDraft));
+
+        assertThatThrownBy(() -> service.saveConfiguration(99L,
+                new VersionConfigurationRequest(List.of(subtestDraft))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no pertenece al item");
+        Mockito.verify(em, Mockito.never()).remove(Mockito.any());
+    }
+
+    @Test
+    void saveConfigurationRejectsDeletedAndCreatedAnswerKeyForSameItem() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+
+        VersionConfigurationRequest.AnswerKeyDraft deletedKey = new VersionConfigurationRequest.AnswerKeyDraft(
+                50L, "tmp-key-1", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                null, null, null, null, null, null, null, null);
+        VersionConfigurationRequest.AnswerKeyDraft createdKey = new VersionConfigurationRequest.AnswerKeyDraft(
+                null, "tmp-key-2", null, VersionConfigurationRequest.DraftStatus.CREATED,
+                10L, null, null, "A", null, null, BigDecimal.ONE, false);
+        VersionConfigurationRequest.ItemDraft firstItemNode = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30-a", null, VersionConfigurationRequest.DraftStatus.UPDATED,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.TEXTO_ABIERTO, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(), deletedKey);
+        VersionConfigurationRequest.ItemDraft secondItemNode = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30-b", null, VersionConfigurationRequest.DraftStatus.UPDATED,
+                "I-1B", TipoItem.SOLO_TEXTO, TipoRespuesta.TEXTO_ABIERTO, "Pregunta", null, 2,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(), createdKey);
+        VersionConfigurationRequest.SubtestDraft firstSubtest = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(firstItemNode));
+        VersionConfigurationRequest.SubtestDraft secondSubtest = new VersionConfigurationRequest.SubtestDraft(
+                21L, "sub-21", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM2", "Memoria 2", null, null, 2, null, false, false, true, null, List.of(secondItemNode));
+
+        assertThatThrownBy(() -> service.saveConfiguration(99L,
+                new VersionConfigurationRequest(List.of(firstSubtest, secondSubtest))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Conflicto en clave de respuesta");
+        Mockito.verify(em, Mockito.never()).persist(Mockito.any());
+        Mockito.verify(em, Mockito.never()).remove(Mockito.any());
+    }
+
+    @Test
+    void saveConfigurationRejectsDeletingCorrectOptionWithoutTouchingAnswerKey() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+        Item item = itemWithVersion(30L, 99L, EstadoVersionTest.BORRADOR);
+        OpcionItem correctOption = new OpcionItem();
+        correctOption.setId(40L);
+        correctOption.setItem(item);
+        ClaveRespuesta existingKey = new ClaveRespuesta();
+        existingKey.setId(50L);
+        existingKey.setItem(item);
+        existingKey.setOpcionCorrecta(correctOption);
+        TypedQuery<ClaveRespuesta> keyQuery = Mockito.mock();
+        when(em.createQuery(
+                "SELECT c FROM ClaveRespuesta c LEFT JOIN FETCH c.opcionCorrecta WHERE c.item.id = :itemId",
+                ClaveRespuesta.class)).thenReturn(keyQuery);
+        when(keyQuery.setParameter("itemId", 30L)).thenReturn(keyQuery);
+        when(keyQuery.getResultList()).thenReturn(List.of(existingKey));
+
+        VersionConfigurationRequest.OptionDraft deletedOption = new VersionConfigurationRequest.OptionDraft(
+                40L, "opt-40", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                "A", "Opcion A", 1, BigDecimal.ONE, List.of());
+        VersionConfigurationRequest.ItemDraft itemDraft = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.OPCION_UNICA, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(deletedOption), null);
+        VersionConfigurationRequest.SubtestDraft subtestDraft = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(itemDraft));
+
+        assertThatThrownBy(() -> service.saveConfiguration(99L,
+                new VersionConfigurationRequest(List.of(subtestDraft))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("opcion correcta");
+        Mockito.verify(em, Mockito.never()).remove(Mockito.any());
+    }
+
+    @Test
+    void saveConfigurationRejectsDeletingCorrectOptionStillReferencedByAnswerKeyDraft() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+
+        VersionConfigurationRequest.OptionDraft deletedOption = new VersionConfigurationRequest.OptionDraft(
+                40L, "opt-40", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                "A", "Opcion A", 1, BigDecimal.ONE, List.of());
+        VersionConfigurationRequest.AnswerKeyDraft keyDraft = new VersionConfigurationRequest.AnswerKeyDraft(
+                50L, "key-50", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                10L, null, 40L, null, null, null, BigDecimal.ONE, false);
+        VersionConfigurationRequest.ItemDraft itemDraft = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.OPCION_UNICA, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(deletedOption), keyDraft);
+        VersionConfigurationRequest.SubtestDraft subtestDraft = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(itemDraft));
+
+        assertThatThrownBy(() -> service.saveConfiguration(99L,
+                new VersionConfigurationRequest(List.of(subtestDraft))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("opcion correcta");
+        Mockito.verify(em, Mockito.never()).remove(Mockito.any());
+    }
+
+    @Test
+    void saveConfigurationAllowsDeletingCorrectOptionWhenAnswerKeyIsAlsoDeleted() {
+        VersionTest version = new VersionTest();
+        version.setId(99L);
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        when(versions.findByIdForUpdate(99L)).thenReturn(Optional.of(version));
+        Subtest subtest = subtestWithVersion(20L, 99L, EstadoVersionTest.BORRADOR);
+        when(em.find(Subtest.class, 20L)).thenReturn(subtest);
+        Item item = itemWithVersion(30L, 99L, EstadoVersionTest.BORRADOR);
+        item.setSubtest(subtest);
+        when(em.find(Item.class, 30L)).thenReturn(item);
+        OpcionItem option = new OpcionItem();
+        option.setId(40L);
+        option.setItem(item);
+        when(em.find(OpcionItem.class, 40L)).thenReturn(option);
+        ClaveRespuesta key = new ClaveRespuesta();
+        key.setId(50L);
+        key.setItem(item);
+        key.setOpcionCorrecta(option);
+        when(em.find(ClaveRespuesta.class, 50L)).thenReturn(key);
+
+        VersionConfigurationRequest.OptionDraft deletedOption = new VersionConfigurationRequest.OptionDraft(
+                40L, "opt-40", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                "A", "Opcion A", 1, BigDecimal.ONE, List.of());
+        VersionConfigurationRequest.AnswerKeyDraft deletedKey = new VersionConfigurationRequest.AnswerKeyDraft(
+                50L, "key-50", null, VersionConfigurationRequest.DraftStatus.DELETED,
+                null, null, null, null, null, null, null, null);
+        VersionConfigurationRequest.ItemDraft itemDraft = new VersionConfigurationRequest.ItemDraft(
+                30L, "item-30", null, VersionConfigurationRequest.DraftStatus.UPDATED,
+                "I-1", TipoItem.SOLO_TEXTO, TipoRespuesta.OPCION_UNICA, "Pregunta", null, 1,
+                BigDecimal.ONE, null, true, true, List.of(), List.of(deletedOption), deletedKey);
+        VersionConfigurationRequest.SubtestDraft subtestDraft = new VersionConfigurationRequest.SubtestDraft(
+                20L, "sub-20", null, VersionConfigurationRequest.DraftStatus.EXISTING,
+                "MEM", "Memoria", null, null, 1, null, false, false, true, null, List.of(itemDraft));
+
+        service.saveConfiguration(99L, new VersionConfigurationRequest(List.of(subtestDraft)));
+
+        var inOrder = Mockito.inOrder(em);
+        inOrder.verify(em).remove(key);
+        inOrder.verify(em).remove(option);
+    }
+
     private static Item itemWithVersion(long itemId, long versionId, EstadoVersionTest state) {
         Subtest subtest = subtestWithVersion(1L, versionId, state);
         Item item = new Item();

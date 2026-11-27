@@ -338,6 +338,7 @@ public class InstrumentAdminService {
             return saved;
         }
         validateConfigurationRequest(request);
+        validateDeletedOptionsNotReferencedByExistingKeys(request.subtests());
         for (VersionConfigurationRequest.SubtestDraft draft : request.subtests()) {
             if (draft.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
                 removeExisting(Subtest.class, draft.id());
@@ -486,6 +487,10 @@ public class InstrumentAdminService {
     private void validateConfigurationRequest(VersionConfigurationRequest request) {
         Set<String> subtestCodes = new HashSet<>();
         Set<Integer> subtestOrders = new HashSet<>();
+        Set<Long> itemsDeletingAnswerKey = new HashSet<>();
+        Set<Long> itemsCreatingAnswerKey = new HashSet<>();
+        Set<String> itemDraftsDeletingAnswerKey = new HashSet<>();
+        Set<String> itemDraftsCreatingAnswerKey = new HashSet<>();
         for (VersionConfigurationRequest.SubtestDraft subtest : request.subtests()) {
             if (subtest.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
                 continue;
@@ -496,11 +501,14 @@ public class InstrumentAdminService {
             if (subtest.order() != null && !subtestOrders.add(subtest.order())) {
                 throw new IllegalArgumentException("Orden de subtest duplicado: " + subtest.order());
             }
-            validateItemDrafts(nullToEmpty(subtest.items()));
+            validateItemDrafts(nullToEmpty(subtest.items()), itemsDeletingAnswerKey, itemsCreatingAnswerKey,
+                    itemDraftsDeletingAnswerKey, itemDraftsCreatingAnswerKey);
         }
     }
 
-    private void validateItemDrafts(List<VersionConfigurationRequest.ItemDraft> items) {
+    private void validateItemDrafts(List<VersionConfigurationRequest.ItemDraft> items,
+            Set<Long> itemsDeletingAnswerKey, Set<Long> itemsCreatingAnswerKey,
+            Set<String> itemDraftsDeletingAnswerKey, Set<String> itemDraftsCreatingAnswerKey) {
         Set<String> itemCodes = new HashSet<>();
         Set<Integer> itemOrders = new HashSet<>();
         for (VersionConfigurationRequest.ItemDraft item : items) {
@@ -513,7 +521,131 @@ public class InstrumentAdminService {
             if (item.order() != null && !itemOrders.add(item.order())) {
                 throw new IllegalArgumentException("Orden de item duplicado: " + item.order());
             }
-            validateOptionDrafts(nullToEmpty(item.options()));
+            List<VersionConfigurationRequest.OptionDraft> options = nullToEmpty(item.options());
+            validateOptionDrafts(options);
+            validateItemAnswerKeyDraft(item, options, itemsDeletingAnswerKey, itemsCreatingAnswerKey,
+                    itemDraftsDeletingAnswerKey, itemDraftsCreatingAnswerKey);
+        }
+    }
+
+    private void validateItemAnswerKeyDraft(VersionConfigurationRequest.ItemDraft item,
+            List<VersionConfigurationRequest.OptionDraft> options,
+            Set<Long> itemsDeletingAnswerKey, Set<Long> itemsCreatingAnswerKey,
+            Set<String> itemDraftsDeletingAnswerKey, Set<String> itemDraftsCreatingAnswerKey) {
+        VersionConfigurationRequest.AnswerKeyDraft answerKey = item.answerKey();
+        if (answerKey == null) {
+            return;
+        }
+        if (answerKey.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+            if (item.id() != null) {
+                itemsDeletingAnswerKey.add(item.id());
+                if (itemsCreatingAnswerKey.contains(item.id())) {
+                    throw new IllegalArgumentException(
+                            "Conflicto en clave de respuesta del item " + item.id()
+                                    + ": no puede eliminarse y crearse en la misma configuracion");
+                }
+            } else if (item.draftId() != null) {
+                itemDraftsDeletingAnswerKey.add(item.draftId());
+                if (itemDraftsCreatingAnswerKey.contains(item.draftId())) {
+                    throw new IllegalArgumentException(
+                            "Conflicto en clave de respuesta del item " + item.draftId()
+                                    + ": no puede eliminarse y crearse en la misma configuracion");
+                }
+            }
+            return;
+        }
+        if (answerKey.status() == VersionConfigurationRequest.DraftStatus.CREATED) {
+            if (item.id() != null) {
+                itemsCreatingAnswerKey.add(item.id());
+                if (itemsDeletingAnswerKey.contains(item.id())) {
+                    throw new IllegalArgumentException(
+                            "Conflicto en clave de respuesta del item " + item.id()
+                                    + ": no puede eliminarse y crearse en la misma configuracion");
+                }
+            } else if (item.draftId() != null) {
+                itemDraftsCreatingAnswerKey.add(item.draftId());
+                if (itemDraftsDeletingAnswerKey.contains(item.draftId())) {
+                    throw new IllegalArgumentException(
+                            "Conflicto en clave de respuesta del item " + item.draftId()
+                                    + ": no puede eliminarse y crearse en la misma configuracion");
+                }
+            }
+        }
+        Set<Long> deletedOptionIds = new HashSet<>();
+        Set<String> deletedOptionDraftIds = new HashSet<>();
+        for (VersionConfigurationRequest.OptionDraft option : options) {
+            if (option.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+                if (option.id() != null) {
+                    deletedOptionIds.add(option.id());
+                }
+                if (option.draftId() != null) {
+                    deletedOptionDraftIds.add(option.draftId());
+                }
+            }
+        }
+        if ((answerKey.correctOptionId() != null && deletedOptionIds.contains(answerKey.correctOptionId()))
+                || (answerKey.correctOptionDraftId() != null
+                        && deletedOptionDraftIds.contains(answerKey.correctOptionDraftId()))) {
+            throw new IllegalArgumentException(
+                    "No se puede eliminar la opcion correcta sin eliminar o reasignar la clave de respuesta");
+        }
+    }
+
+    private void validateDeletedOptionsNotReferencedByExistingKeys(
+            List<VersionConfigurationRequest.SubtestDraft> subtests) {
+        Set<Long> deletedAnswerKeyIds = new HashSet<>();
+        for (VersionConfigurationRequest.SubtestDraft subtest : subtests) {
+            if (subtest.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+                continue;
+            }
+            for (VersionConfigurationRequest.ItemDraft item : nullToEmpty(subtest.items())) {
+                if (item.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+                    continue;
+                }
+                if (item.answerKey() != null
+                        && item.answerKey().status() == VersionConfigurationRequest.DraftStatus.DELETED
+                        && item.answerKey().id() != null) {
+                    deletedAnswerKeyIds.add(item.answerKey().id());
+                }
+            }
+        }
+        for (VersionConfigurationRequest.SubtestDraft subtest : subtests) {
+            if (subtest.status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+                continue;
+            }
+            for (VersionConfigurationRequest.ItemDraft item : nullToEmpty(subtest.items())) {
+                if (item.status() == VersionConfigurationRequest.DraftStatus.DELETED || item.id() == null) {
+                    continue;
+                }
+                boolean keyUntouchedOrNoOpDelete = item.answerKey() == null
+                        || (item.answerKey().status() == VersionConfigurationRequest.DraftStatus.DELETED
+                                && item.answerKey().id() == null);
+                if (!keyUntouchedOrNoOpDelete) {
+                    continue;
+                }
+                Set<Long> deletedOptionIds = new HashSet<>();
+                for (VersionConfigurationRequest.OptionDraft option : nullToEmpty(item.options())) {
+                    if (option.status() == VersionConfigurationRequest.DraftStatus.DELETED && option.id() != null) {
+                        deletedOptionIds.add(option.id());
+                    }
+                }
+                if (deletedOptionIds.isEmpty()) {
+                    continue;
+                }
+                List<ClaveRespuesta> existingKeys = em.createQuery(
+                        "SELECT c FROM ClaveRespuesta c LEFT JOIN FETCH c.opcionCorrecta WHERE c.item.id = :itemId",
+                        ClaveRespuesta.class)
+                        .setParameter("itemId", item.id())
+                        .getResultList();
+                for (ClaveRespuesta existingKey : existingKeys) {
+                    if (!deletedAnswerKeyIds.contains(existingKey.getId())
+                            && existingKey.getOpcionCorrecta() != null
+                            && deletedOptionIds.contains(existingKey.getOpcionCorrecta().getId())) {
+                        throw new IllegalArgumentException(
+                                "No se puede eliminar la opcion correcta sin eliminar o reasignar la clave de respuesta");
+                    }
+                }
+            }
         }
     }
 
@@ -636,6 +768,10 @@ public class InstrumentAdminService {
             if (draft.id() == null) {
                 em.persist(item);
             }
+            if (draft.answerKey() != null
+                    && draft.answerKey().status() == VersionConfigurationRequest.DraftStatus.DELETED) {
+                deleteAnswerKey(item, draft.answerKey());
+            }
             persistItemImages(item, nullToEmpty(draft.images()));
             persistDraftOptions(item, nullToEmpty(draft.options()), optionsByDraftId);
             if (draft.answerKey() != null && draft.answerKey().status() != VersionConfigurationRequest.DraftStatus.DELETED) {
@@ -704,6 +840,17 @@ public class InstrumentAdminService {
                 em.persist(image);
             }
         }
+    }
+
+    private void deleteAnswerKey(Item item, VersionConfigurationRequest.AnswerKeyDraft draft) {
+        if (draft.id() == null) {
+            return;
+        }
+        ClaveRespuesta key = find(ClaveRespuesta.class, draft.id());
+        if (item.getId() == null || key.getItem() == null || !Objects.equals(key.getItem().getId(), item.getId())) {
+            throw new IllegalStateException("La clave de respuesta no pertenece al item indicado");
+        }
+        em.remove(key);
     }
 
     private void persistAnswerKey(Item item, VersionConfigurationRequest.AnswerKeyDraft draft,
