@@ -25,9 +25,12 @@ public final class ImageUploadKeys {
     private ImageUploadKeys() {
     }
 
-    /** Devuelve la clave recortada, o null si no viene o esta en blanco; lanza IllegalArgumentException (400) si es invalida. */
+    /**
+     * Devuelve la clave recortada, o null si la cabecera no viene; lanza IllegalArgumentException (400) si es invalida.
+     * Una clave presente pero vacia o solo con espacios es invalida (no equivale a no enviarla).
+     */
     public static String normalize(String idempotencyKey) {
-        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+        if (idempotencyKey == null) {
             return null;
         }
         String normalized = idempotencyKey.trim();

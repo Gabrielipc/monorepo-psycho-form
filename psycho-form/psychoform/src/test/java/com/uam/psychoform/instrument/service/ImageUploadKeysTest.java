@@ -19,9 +19,17 @@ class ImageUploadKeysTest {
     }
 
     @Test
-    void claveAusenteOEnBlancoEsNula() {
+    void claveAusenteEsNula() {
         assertThat(ImageUploadKeys.normalize(null)).isNull();
-        assertThat(ImageUploadKeys.normalize("   ")).isNull();
+    }
+
+    @Test
+    void claveVaciaOSoloEspaciosEsInvalida() {
+        for (String blank : new String[] { "", " ", "   ", "\t" }) {
+            assertThatThrownBy(() -> ImageUploadKeys.normalize(blank))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Idempotency-Key");
+        }
     }
 
     @Test

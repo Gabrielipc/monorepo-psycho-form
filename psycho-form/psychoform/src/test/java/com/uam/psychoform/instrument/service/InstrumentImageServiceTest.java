@@ -240,6 +240,7 @@ class InstrumentImageServiceTest {
         shared.setId(77L);
         shared.setRutaAlmacenamiento("test-config/items/10/shared.png");
         image.setRecurso(shared);
+        when(em.find(Item.class, 10L)).thenReturn(item);
         when(em.find(ImagenItem.class, 55L)).thenReturn(image);
         when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
         when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
@@ -280,6 +281,7 @@ class InstrumentImageServiceTest {
         RecursoMultimedia previous = new RecursoMultimedia();
         previous.setRutaAlmacenamiento("test-config/items/10/old.png");
         image.setRecurso(previous);
+        when(em.find(Item.class, 10L)).thenReturn(item);
         when(em.find(ImagenItem.class, 55L)).thenReturn(image);
         when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
         when(currentActor.usuarioId()).thenReturn(ACTOR_ID);
@@ -419,6 +421,7 @@ class InstrumentImageServiceTest {
         image.setTextoAlternativo("Nueva");
         image.setRecurso(current);
 
+        when(em.find(Item.class, 10L)).thenReturn(item);
         when(em.find(ImagenItem.class, 55L)).thenReturn(image);
         when(versions.findByIdForUpdate(20L)).thenReturn(Optional.of(item.getSubtest().getVersionTest()));
         when(currentActor.usuarioId()).thenReturn(ACTOR_ID);

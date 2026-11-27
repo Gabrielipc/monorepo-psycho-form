@@ -231,11 +231,15 @@ public class InstrumentImageService {
             String role, String idempotencyKey) throws IOException {
         String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_ITEM, idempotencyKey);
         return inTransaction(uploadKey, () -> {
+            // Bloquear la version ANTES de cargar la imagen: una peticion concurrente puede reemplazarla mientras esta
+            // espera el bloqueo, y debe operar sobre el estado ya confirmado, no sobre el vinculo leido antes.
+            Item item = find(Item.class, itemId);
+            VersionTest version = lockVersion(item.getSubtest().getVersionTest().getId());
             ImagenItem image = find(ImagenItem.class, imageId);
             if (!image.getItem().getId().equals(itemId)) {
                 throw new EntityNotFoundException("Imagen de item no encontrada: " + imageId);
             }
-            requireDraft(image.getItem().getSubtest().getVersionTest().getId());
+            requireDraftState(version);
             return replaceItemImage(image, itemId, file, altText, role, uploadKey);
         });
     }
@@ -269,11 +273,14 @@ public class InstrumentImageService {
             String idempotencyKey) throws IOException {
         String uploadKey = scopedKey(ImageUploadKeys.Operation.REPLACE_OPTION, idempotencyKey);
         return inTransaction(uploadKey, () -> {
+            // Bloquear la version ANTES de cargar la imagen (ver replaceItemImage).
+            OpcionItem option = find(OpcionItem.class, optionId);
+            VersionTest version = lockVersion(option.getItem().getSubtest().getVersionTest().getId());
             ImagenOpcion image = find(ImagenOpcion.class, imageId);
             if (!image.getOpcion().getId().equals(optionId)) {
                 throw new EntityNotFoundException("Imagen de opcion no encontrada: " + imageId);
             }
-            requireDraft(image.getOpcion().getItem().getSubtest().getVersionTest().getId());
+            requireDraftState(version);
             return replaceOptionImage(image, optionId, file, altText, uploadKey);
         });
     }
@@ -526,12 +533,20 @@ public class InstrumentImageService {
     }
 
     private VersionTest requireDraft(long versionId) {
-        VersionTest version = versions.findByIdForUpdate(versionId)
+        VersionTest version = lockVersion(versionId);
+        requireDraftState(version);
+        return version;
+    }
+
+    private VersionTest lockVersion(long versionId) {
+        return versions.findByIdForUpdate(versionId)
                 .orElseThrow(() -> new EntityNotFoundException("Version no encontrada: " + versionId));
+    }
+
+    private void requireDraftState(VersionTest version) {
         if (version.getEstado() != EstadoVersionTest.BORRADOR) {
             throw new IllegalStateException("La version publicada o aprobada no se edita directamente");
         }
-        return version;
     }
 
     private Usuario currentUser() {

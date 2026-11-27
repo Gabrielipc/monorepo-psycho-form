@@ -198,7 +198,7 @@ public class InstrumentController {
             @RequestParam(required = false, defaultValue = "ENUNCIADO") String role,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+        ImageUploadResponse uploaded = idempotencyKey == null
                 ? images.uploadItemImage(id, file, order, altText, role)
                 : images.uploadItemImage(id, file, order, altText, role, idempotencyKey);
         return ApiResponse.ok(EntityView.of(uploaded));
@@ -210,7 +210,7 @@ public class InstrumentController {
             @RequestParam(required = false) Integer order, @RequestParam(required = false) String altText,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+        ImageUploadResponse uploaded = idempotencyKey == null
                 ? images.uploadOptionImage(id, file, order, altText)
                 : images.uploadOptionImage(id, file, order, altText, idempotencyKey);
         return ApiResponse.ok(EntityView.of(uploaded));
@@ -224,7 +224,7 @@ public class InstrumentController {
             @RequestParam(required = false, defaultValue = "ENUNCIADO") String role,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+        ImageUploadResponse uploaded = idempotencyKey == null
                 ? images.replaceItemImage(itemId, imageId, file, altText, role)
                 : images.replaceItemImage(itemId, imageId, file, altText, role, idempotencyKey);
         return ApiResponse.ok(EntityView.of(uploaded));
@@ -238,7 +238,7 @@ public class InstrumentController {
             @RequestParam(required = false, defaultValue = "ENUNCIADO") String role,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+        ImageUploadResponse uploaded = idempotencyKey == null
                 ? images.replaceItemImageByOrder(itemId, order, file, altText, role)
                 : images.replaceItemImageByOrder(itemId, order, file, altText, role, idempotencyKey);
         return ApiResponse.ok(EntityView.of(uploaded));
@@ -251,7 +251,7 @@ public class InstrumentController {
             @RequestParam(required = false) String altText,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+        ImageUploadResponse uploaded = idempotencyKey == null
                 ? images.replaceOptionImage(optionId, imageId, file, altText)
                 : images.replaceOptionImage(optionId, imageId, file, altText, idempotencyKey);
         return ApiResponse.ok(EntityView.of(uploaded));
@@ -264,14 +264,10 @@ public class InstrumentController {
             @RequestParam(required = false) String altText,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey)
             throws java.io.IOException {
-        ImageUploadResponse uploaded = isBlank(idempotencyKey)
+        ImageUploadResponse uploaded = idempotencyKey == null
                 ? images.replaceOptionImageByOrder(optionId, order, file, altText)
                 : images.replaceOptionImageByOrder(optionId, order, file, altText, idempotencyKey);
         return ApiResponse.ok(EntityView.of(uploaded));
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 
     @GetMapping("/scoring/strategies")
