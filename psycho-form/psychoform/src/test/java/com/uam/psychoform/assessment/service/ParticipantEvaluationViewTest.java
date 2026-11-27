@@ -120,6 +120,39 @@ class ParticipantEvaluationViewTest {
         Mockito.verify(pausas).findBySesionAplicacionIdOrderByPausadoEnAsc(30L);
     }
 
+    @Test
+    void asignacionCompletadaExponeEstadoFinalSinItemsNiConsultarlos() {
+        AsignacionTest asignacion = asignacion();
+        asignacion.setEstado(EstadoAsignacion.COMPLETADO);
+        asignacion.getSesionAplicacion().setEstado(EstadoSesionAplicacion.CERRADA);
+        IntentoTest intento = new IntentoTest();
+        intento.setId(77L);
+        intento.setEstado(EstadoIntento.COMPLETADO);
+        Subtest memoria = subtest(10L, "MEM", "Memoria");
+        SesionSubtest sesionMemoria = sesionSubtest(memoria, 1);
+        IntentoSubtest intentoMemoria = new IntentoSubtest();
+        intentoMemoria.setSubtest(memoria);
+        intentoMemoria.setSesionSubtest(sesionMemoria);
+        intentoMemoria.setEstado(EstadoIntento.COMPLETADO);
+        intentoMemoria.setIniciadoEn(java.time.LocalDateTime.now(CLOCK).minusMinutes(5));
+        when(asignaciones.findByIdWithSessionAndParticipant(50L)).thenReturn(Optional.of(asignacion));
+        when(intentos.findByAsignacionId(50L)).thenReturn(Optional.of(intento));
+        when(intentoSubtests.findByIntentoIdWithSubtest(77L)).thenReturn(List.of(intentoMemoria));
+        when(sesionSubtests.findBySesionAplicacionIdWithSubtestOrderByNumeroOrdenAsc(30L))
+                .thenReturn(List.of(sesionMemoria));
+
+        ParticipantEvaluationView.EvaluationPayload payload = view.getEvaluationPayload(50L);
+
+        assertThat(payload.attemptStatus()).isEqualTo("COMPLETADO");
+        assertThat(payload.sessionStatus()).isEqualTo("CERRADA");
+        assertThat(payload.subtests()).singleElement().satisfies(subtest -> {
+            assertThat(subtest.status()).isEqualTo("COMPLETADO");
+            assertThat(subtest.startedAt()).isNotNull();
+            assertThat(subtest.items()).isEmpty();
+        });
+        Mockito.verifyNoInteractions(items, opciones, imagenesItem, imagenesOpcion);
+    }
+
     private static AsignacionTest asignacion() {
         Participante participante = new Participante();
         participante.setId(UUID.randomUUID());

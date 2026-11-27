@@ -77,17 +77,31 @@ public class ParticipantAccessService {
                 asignacion.getTokenExpiraEn());
     }
 
+    /**
+     * Lectura con contenido (items de un subtest). Una asignacion COMPLETADO sigue respondiendo 409
+     * ASIGNACION_NO_OPERABLE: no se exponen items de un intento ya entregado.
+     */
     @Transactional
     public ParticipantAccess validateRuntimeRead(ParticipantAccess tokenAccess) {
-        return validateRuntime(tokenAccess, false);
+        return validateRuntime(tokenAccess, false, false);
+    }
+
+    /**
+     * Lectura del estado final (GET /evaluacion-participante/yo). Admite asignaciones COMPLETADO, incluso con la
+     * sesion CERRADA o CANCELADA, para que el participante pueda confirmar su entrega. ANULADO y EXPIRADO siguen en 409.
+     */
+    @Transactional
+    public ParticipantAccess validateRuntimeStatusRead(ParticipantAccess tokenAccess) {
+        return validateRuntime(tokenAccess, false, true);
     }
 
     @Transactional
     public ParticipantAccess validateRuntimeWrite(ParticipantAccess tokenAccess) {
-        return validateRuntime(tokenAccess, true);
+        return validateRuntime(tokenAccess, true, false);
     }
 
-    private ParticipantAccess validateRuntime(ParticipantAccess tokenAccess, boolean write) {
+    private ParticipantAccess validateRuntime(ParticipantAccess tokenAccess, boolean write,
+            boolean allowCompletedRead) {
         LocalDateTime now = LocalDateTime.now(clock);
         AsignacionTest asignacion = asignaciones.findByIdForUpdate(tokenAccess.assignmentId())
                 .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + tokenAccess.assignmentId()));
@@ -95,18 +109,24 @@ public class ParticipantAccessService {
         if (!Objects.equals(asignacion.getParticipante().getId(), tokenAccess.participantId())) {
             throw new org.springframework.security.access.AccessDeniedException("Asignacion fuera de alcance");
         }
+        boolean completedRead = allowCompletedRead && !write
+                && asignacion.getEstado() == EstadoAsignacion.COMPLETADO;
         if (asignacion.getTokenExpiraEn().isBefore(now)) {
-            asignacion.setEstado(EstadoAsignacion.EXPIRADO);
+            if (!completedRead) {
+                asignacion.setEstado(EstadoAsignacion.EXPIRADO);
+            }
             throw new ParticipantConflictException(ParticipantConflictException.TOKEN_EXPIRADO, "Token expirado");
         }
         EstadoSesionAplicacion estadoSesion = asignacion.getSesionAplicacion().getEstado();
         if (write) {
             SessionWriteGuard.checkWritable(estadoSesion);
+        } else if (completedRead) {
+            SessionWriteGuard.checkReadableCompleted(estadoSesion);
         } else {
             SessionWriteGuard.checkReadable(estadoSesion);
         }
         if (asignacion.getEstado() == EstadoAsignacion.ANULADO || asignacion.getEstado() == EstadoAsignacion.EXPIRADO
-                || asignacion.getEstado() == EstadoAsignacion.COMPLETADO) {
+                || (asignacion.getEstado() == EstadoAsignacion.COMPLETADO && !completedRead)) {
             throw new ParticipantConflictException(ParticipantConflictException.ASIGNACION_NO_OPERABLE,
                     "La asignacion no permite operaciones de participante");
         }

@@ -2,6 +2,7 @@ package com.uam.psychoform.assessment.service;
 
 import com.uam.psychoform.assessment.model.AsignacionTest;
 import com.uam.psychoform.assessment.model.IntentoSubtest;
+import com.uam.psychoform.assessment.model.EstadoAsignacion;
 import com.uam.psychoform.assessment.model.EstadoSesionAplicacion;
 import com.uam.psychoform.assessment.model.PausaSesion;
 import com.uam.psychoform.assessment.model.IntentoTest;
@@ -72,8 +73,11 @@ public class ParticipantEvaluationView {
         List<PausaSesion> pausas = timing.loadPausas(sesionId);
         List<SesionSubtest> sessionSubtests = sesionSubtests
                 .findBySesionAplicacionIdWithSubtestOrderByNumeroOrdenAsc(asignacion.getSesionAplicacion().getId());
-        List<Long> subtestIds = sessionSubtests.stream().map(sesionSubtest -> sesionSubtest.getSubtest().getId())
-                .toList();
+        // Una asignacion COMPLETADO es de solo lectura: se devuelve el estado final sin items ni opciones.
+        boolean completed = asignacion.getEstado() == EstadoAsignacion.COMPLETADO;
+        List<Long> subtestIds = completed
+                ? List.of()
+                : sessionSubtests.stream().map(sesionSubtest -> sesionSubtest.getSubtest().getId()).toList();
         Map<Long, List<Item>> itemsBySubtest = subtestIds.isEmpty()
                 ? Map.of()
                 : items.findBySubtestIdInAndEstadoOrderBySubtestAndItemOrder(subtestIds, EstadoGeneral.ACTIVO)

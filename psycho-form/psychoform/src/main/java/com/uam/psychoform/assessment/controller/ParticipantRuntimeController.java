@@ -39,7 +39,8 @@ public class ParticipantRuntimeController {
 
     @GetMapping("/evaluacion-participante/yo")
     public ApiResponse<?> me(HttpServletRequest request) {
-        var participantAccess = requireReadAccess(request);
+        var participantAccess = access.validateRuntimeStatusRead(
+                participantJwt.requireAccess(request.getHeader("Authorization")));
         return ApiResponse.ok(evaluation.getEvaluationPayload(participantAccess.assignmentId()));
     }
 
