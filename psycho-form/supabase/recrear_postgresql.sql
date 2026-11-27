@@ -2533,6 +2533,10 @@ WHERE r.nombre_rol = 'ADMINISTRADOR'
    ))
 ON CONFLICT DO NOTHING;
 
+-- migrations/20261126000400_idx_intento_estado_fin.sql
+CREATE INDEX IF NOT EXISTS idx_intento_estado_fin
+    ON intento_test(estado, finalizado_en);
+
 -- seed.sql
 -- Seed data is managed by versioned migrations in supabase/migrations.
 

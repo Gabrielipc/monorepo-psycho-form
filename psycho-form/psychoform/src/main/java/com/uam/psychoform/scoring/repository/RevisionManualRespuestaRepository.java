@@ -28,4 +28,13 @@ public interface RevisionManualRespuestaRepository extends JpaRepository<Revisio
             order by review.creadoEn asc
             """)
     List<RevisionManualRespuesta> findPendingWithAnswerContext(EstadoRevisionManual estado);
+
+    @Query("""
+            select review.respuesta.intento.id, count(review)
+            from RevisionManualRespuesta review
+            where review.respuesta.intento.id in :intentoIds
+              and review.estado <> :excludedStatus
+            group by review.respuesta.intento.id
+            """)
+    List<Object[]> countUnreviewedByIntentoIds(Collection<Long> intentoIds, EstadoRevisionManual excludedStatus);
 }
