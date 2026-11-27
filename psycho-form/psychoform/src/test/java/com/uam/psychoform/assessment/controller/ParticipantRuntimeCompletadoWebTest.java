@@ -126,9 +126,9 @@ class ParticipantRuntimeCompletadoWebTest {
     }
 
     @Test
-    void yoConAsignacionCompletadaYTokenExpiradoResponde409TokenExpirado() throws Exception {
+    void yoConAsignacionCompletadaYEnlaceVencidoResponde200PorqueMandaElJwt() throws Exception {
         mvc(EstadoAsignacion.COMPLETADO, EstadoSesionAplicacion.CERRADA, LocalDateTime.now(CLOCK).minusMinutes(1))
-                .perform(get("/evaluacion-participante/yo")).andExpect(status().isConflict())
-                .andExpect(jsonPath("$.error.code").value("TOKEN_EXPIRADO"));
+                .perform(get("/evaluacion-participante/yo")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.attemptStatus").value("COMPLETADO"));
     }
 }

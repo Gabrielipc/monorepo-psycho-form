@@ -102,7 +102,6 @@ public class ParticipantAccessService {
 
     private ParticipantAccess validateRuntime(ParticipantAccess tokenAccess, boolean write,
             boolean allowCompletedRead) {
-        LocalDateTime now = LocalDateTime.now(clock);
         AsignacionTest asignacion = asignaciones.findByIdForUpdate(tokenAccess.assignmentId())
                 .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + tokenAccess.assignmentId()));
 
@@ -111,12 +110,9 @@ public class ParticipantAccessService {
         }
         boolean completedRead = allowCompletedRead && !write
                 && asignacion.getEstado() == EstadoAsignacion.COMPLETADO;
-        if (asignacion.getTokenExpiraEn().isBefore(now)) {
-            if (!completedRead) {
-                asignacion.setEstado(EstadoAsignacion.EXPIRADO);
-            }
-            throw new ParticipantConflictException(ParticipantConflictException.TOKEN_EXPIRADO, "Token expirado");
-        }
+        // El vencimiento del enlace (tokenExpiraEn) se comprueba solo al canjearlo (grantParticipantAccess). Con un
+        // JWT ya emitido manda su exp firmado, que valida el filtro JWT (409 TOKEN_EXPIRADO): regenerar el enlace
+        // con otro TTL no debe cortar una evaluacion en curso.
         EstadoSesionAplicacion estadoSesion = asignacion.getSesionAplicacion().getEstado();
         if (write) {
             SessionWriteGuard.checkWritable(estadoSesion);
