@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import com.uam.psychoform.assessment.model.AsignacionTest;
@@ -29,7 +30,11 @@ import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.BaremoRepository;
 import com.uam.psychoform.instrument.repository.OpcionPuntajeDimensionRepository;
 import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
+import com.uam.psychoform.scoring.model.CalificacionRespuesta;
+import com.uam.psychoform.scoring.model.EstadoRevisionManual;
 import com.uam.psychoform.scoring.model.Resultado;
+import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
+import com.uam.psychoform.scoring.repository.RevisionManualRespuestaRepository;
 import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
 import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
 import com.uam.psychoform.scoring.repository.ResultadoRepository;
@@ -59,11 +64,12 @@ class ClaveSimpleScoringServiceTest {
     private final RangoBaremoRepository rangosBaremo = Mockito.mock(RangoBaremoRepository.class);
     private final CalificacionRespuestaRepository calificaciones = Mockito.mock(CalificacionRespuestaRepository.class);
     private final ResultadoDimensionRepository resultadosDimension = Mockito.mock(ResultadoDimensionRepository.class);
+    private final RevisionManualRespuestaRepository revisiones = Mockito.mock(RevisionManualRespuestaRepository.class);
     private final UsuarioRepository usuarios = Mockito.mock(UsuarioRepository.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final ClaveSimpleScoringService service = new ClaveSimpleScoringService(intentos, resultados, respuestas,
             opcionesSeleccionadas, claves, puntajesDimension, baremos, rangosBaremo, calificaciones,
-            resultadosDimension, usuarios, currentActor,
+            resultadosDimension, revisiones, usuarios, currentActor,
             Clock.fixed(Instant.parse("2026-06-24T12:00:00Z"), ZoneOffset.UTC));
 
     @Test
@@ -273,6 +279,145 @@ class ClaveSimpleScoringServiceTest {
 
     private static ClaveRespuesta claveBase(OpcionItem correcta, BigDecimal puntaje) {
         return clave(item(10L), correcta, puntaje);
+    }
+
+    // ---- B23: revision manual creada al calificar ----
+
+    @Test
+    void calificarCreaUnaRevisionPendientePorCadaItemConRevisionManual() {
+        RespuestaItem r1 = respuestaManual(31L, 11L);
+        RespuestaItem r2 = respuestaManual(32L, 12L);
+        RespuestaItem r3 = respuestaAutomatica(33L, 13L);
+        prepararIntento(List.of(r1, r2, r3), List.of(
+                claveManual(r1.getItem(), "5.00"), claveManual(r2.getItem(), "3.00"), claveAutomatica(r3.getItem())));
+
+        Resultado resultado = service.scoreAttempt(7L);
+
+        assertThat(resultado.getCantidadPendientesRevision()).isEqualTo(2);
+        assertThat(resultado.getRequiereRevisionManual()).isTrue();
+        assertThat(resultado.getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+        verify(revisiones, times(2)).save(Mockito.argThat(review -> review.getEstado() == EstadoRevisionManual.PENDIENTE
+                && review.getReglaCalificacion() != null
+                && (review.getRespuesta() == r1 || review.getRespuesta() == r2)));
+    }
+
+    @Test
+    void respuestaMarcadaParaRevisionTambienCreaRevisionAunqueLaClaveNoLaPida() {
+        RespuestaItem respuesta = respuestaAutomatica(31L, 11L);
+        respuesta.setRequiereRevisionManual(true);
+        prepararIntento(List.of(respuesta), List.of(claveAutomatica(respuesta.getItem())));
+
+        Resultado resultado = service.scoreAttempt(7L);
+
+        assertThat(resultado.getCantidadPendientesRevision()).isEqualTo(1);
+        verify(revisiones, times(1)).save(Mockito.argThat(review -> review.getRespuesta() == respuesta));
+    }
+
+    @Test
+    void recalificarNoDuplicaRevisionesExistentes() {
+        RespuestaItem r1 = respuestaManual(31L, 11L);
+        RespuestaItem r2 = respuestaManual(32L, 12L);
+        Resultado existente = new Resultado();
+        existente.setId(70L);
+        when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(existente));
+        when(calificaciones.findByResultadoId(70L)).thenReturn(List.of(calificacionManual(r1), calificacionManual(r2)));
+        when(revisiones.findByRespuestaIdIn(List.of(31L, 32L))).thenReturn(List.of(revision(r1, EstadoRevisionManual.PENDIENTE, null),
+                revision(r2, EstadoRevisionManual.PENDIENTE, null)));
+
+        assertThat(service.scoreAttempt(7L)).isSameAs(existente);
+
+        verify(revisiones, never()).save(Mockito.any());
+    }
+
+    @Test
+    void recalificarCreaSoloLasRevisionesQueFaltan() {
+        RespuestaItem r1 = respuestaManual(31L, 11L);
+        RespuestaItem r2 = respuestaManual(32L, 12L);
+        Resultado existente = new Resultado();
+        existente.setId(70L);
+        when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(existente));
+        when(calificaciones.findByResultadoId(70L)).thenReturn(List.of(calificacionManual(r1), calificacionManual(r2)));
+        when(revisiones.findByRespuestaIdIn(List.of(31L, 32L)))
+                .thenReturn(List.of(revision(r1, EstadoRevisionManual.OBSERVADO, null)));
+
+        service.scoreAttempt(7L);
+
+        verify(revisiones, times(1)).save(Mockito.argThat(review -> review.getRespuesta() == r2));
+    }
+
+    @Test
+    void unaRevisionYaResueltaSeConservaYSuPuntajeSeAplicaAlCalcular() {
+        RespuestaItem r1 = respuestaManual(31L, 11L);
+        RespuestaItem r2 = respuestaManual(32L, 12L);
+        prepararIntento(List.of(r1, r2), List.of(claveManual(r1.getItem(), "5.00"), claveManual(r2.getItem(), "3.00")));
+        when(revisiones.findByRespuestaIdIn(List.of(31L, 32L)))
+                .thenReturn(List.of(revision(r1, EstadoRevisionManual.REVISADO, new BigDecimal("4.50"))));
+
+        Resultado resultado = service.scoreAttempt(7L);
+
+        assertThat(resultado.getPuntajeTotalDirecto()).isEqualByComparingTo("4.50");
+        assertThat(resultado.getCantidadCorrectas()).isEqualTo(1);
+        assertThat(resultado.getCantidadPendientesRevision()).isEqualTo(1);
+        assertThat(resultado.getRequiereRevisionManual()).isTrue();
+        // solo se crea la de la respuesta sin revision; la resuelta no se toca
+        verify(revisiones, times(1)).save(Mockito.argThat(review -> review.getRespuesta() == r2));
+        verify(calificaciones).save(Mockito.argThat(c -> c.getRespuesta() == r1 && !c.getRequiereRevisionManual()
+                && c.getEsCorrecta() && c.getPuntajeObtenido().compareTo(new BigDecimal("4.50")) == 0));
+    }
+
+    private void prepararIntento(List<RespuestaItem> respuestasIntento, List<ClaveRespuesta> clavesIntento) {
+        UUID actorId = UUID.randomUUID();
+        Usuario actor = new Usuario();
+        actor.setId(actorId);
+        when(resultados.findByIntentoId(7L)).thenReturn(Optional.empty());
+        when(intentos.findByIdForUpdate(7L)).thenReturn(Optional.of(intentoPublicado()));
+        when(currentActor.usuarioId()).thenReturn(actorId);
+        when(usuarios.findById(actorId)).thenReturn(Optional.of(actor));
+        when(respuestas.findByIntentoIdWithItem(7L)).thenReturn(respuestasIntento);
+        when(claves.findOfficialKeysByVersionId(100L)).thenReturn(clavesIntento);
+    }
+
+    private static RespuestaItem respuestaManual(Long id, Long itemId) {
+        RespuestaItem respuesta = respuestaAutomatica(id, itemId);
+        respuesta.getItem().setTipoRespuesta(TipoRespuesta.TEXTO_ABIERTO);
+        return respuesta;
+    }
+
+    private static RespuestaItem respuestaAutomatica(Long id, Long itemId) {
+        RespuestaItem respuesta = new RespuestaItem();
+        respuesta.setId(id);
+        respuesta.setItem(item(itemId));
+        respuesta.setRequiereRevisionManual(false);
+        return respuesta;
+    }
+
+    private static ClaveRespuesta claveManual(Item item, String puntaje) {
+        ClaveRespuesta clave = clave(item, null, new BigDecimal(puntaje));
+        clave.setRequiereRevisionManual(true);
+        return clave;
+    }
+
+    private static ClaveRespuesta claveAutomatica(Item item) {
+        ClaveRespuesta clave = clave(item, null, new BigDecimal("1.00"));
+        clave.setTextoEsperado("x");
+        return clave;
+    }
+
+    private static CalificacionRespuesta calificacionManual(RespuestaItem respuesta) {
+        CalificacionRespuesta calificacion = new CalificacionRespuesta();
+        calificacion.setRespuesta(respuesta);
+        calificacion.setReglaCalificacion(new ReglaCalificacion());
+        calificacion.setRequiereRevisionManual(true);
+        return calificacion;
+    }
+
+    private static RevisionManualRespuesta revision(RespuestaItem respuesta, EstadoRevisionManual estado,
+            BigDecimal puntaje) {
+        RevisionManualRespuesta review = new RevisionManualRespuesta();
+        review.setRespuesta(respuesta);
+        review.setEstado(estado);
+        review.setPuntajeAsignado(puntaje);
+        return review;
     }
 
     private static IntentoTest intentoPublicado() {

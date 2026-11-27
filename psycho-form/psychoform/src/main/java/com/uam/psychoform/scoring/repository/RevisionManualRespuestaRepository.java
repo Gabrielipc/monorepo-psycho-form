@@ -2,12 +2,20 @@ package com.uam.psychoform.scoring.repository;
 
 import com.uam.psychoform.scoring.model.EstadoRevisionManual;
 import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
+import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 public interface RevisionManualRespuestaRepository extends JpaRepository<RevisionManualRespuesta, Long> {
     List<RevisionManualRespuesta> findByEstadoOrderByCreadoEnAsc(EstadoRevisionManual estado);
+
+    Optional<RevisionManualRespuesta> findByRespuestaId(Long respuestaId);
+
+    List<RevisionManualRespuesta> findByRespuestaIdIn(Collection<Long> respuestaIds);
+
+    List<RevisionManualRespuesta> findByRespuestaIntentoId(Long intentoId);
 
     @Query("""
             select review from RevisionManualRespuesta review

@@ -1,6 +1,7 @@
 package com.uam.psychoform.scoring.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -10,7 +11,17 @@ import com.uam.psychoform.assessment.model.AsignacionTest;
 import com.uam.psychoform.assessment.model.IntentoTest;
 import com.uam.psychoform.assessment.model.RespuestaItem;
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
+import com.uam.psychoform.assessment.repository.IntentoTestRepository;
 import com.uam.psychoform.audit.service.AuditLogService;
+import com.uam.psychoform.instrument.model.ClaveRespuesta;
+import com.uam.psychoform.instrument.model.ReglaCalificacion;
+import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
+import com.uam.psychoform.scoring.model.CalificacionRespuesta;
+import com.uam.psychoform.scoring.model.Resultado;
+import com.uam.psychoform.scoring.model.ResultadoDimension;
+import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
+import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
+import com.uam.psychoform.scoring.repository.ResultadoRepository;
 import com.uam.psychoform.instrument.model.Item;
 import com.uam.psychoform.scoring.model.EstadoRevisionManual;
 import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
@@ -35,10 +46,16 @@ class ManualReviewServiceTest {
 
     private final RevisionManualRespuestaRepository reviews = Mockito.mock(RevisionManualRespuestaRepository.class);
     private final RespuestaItemRepository answers = Mockito.mock(RespuestaItemRepository.class);
+    private final IntentoTestRepository attempts = Mockito.mock(IntentoTestRepository.class);
+    private final ResultadoRepository results = Mockito.mock(ResultadoRepository.class);
+    private final CalificacionRespuestaRepository gradings = Mockito.mock(CalificacionRespuestaRepository.class);
+    private final ResultadoDimensionRepository dimensionResults = Mockito.mock(ResultadoDimensionRepository.class);
+    private final ClaveRespuestaLookupRepository keys = Mockito.mock(ClaveRespuestaLookupRepository.class);
     private final UsuarioRepository users = Mockito.mock(UsuarioRepository.class);
     private final CurrentActor currentActor = Mockito.mock(CurrentActor.class);
     private final AuditLogService audit = Mockito.mock(AuditLogService.class);
-    private final ManualReviewService service = new ManualReviewService(reviews, answers, users, currentActor, audit, CLOCK);
+    private final ManualReviewService service = new ManualReviewService(reviews, answers, attempts, results, gradings,
+            dimensionResults, keys, users, currentActor, audit, CLOCK);
 
     @Test
     void metodosExponenPermisosCorrectos() throws Exception {
@@ -72,28 +89,205 @@ class ManualReviewServiceTest {
 
     @Test
     void resolveAsignaPuntajeRevisorYAuditoria() {
-        UUID reviewerId = UUID.randomUUID();
-        Usuario reviewer = new Usuario();
-        reviewer.setId(reviewerId);
-        RevisionManualRespuesta review = new RevisionManualRespuesta();
-        review.setId(55L);
-        review.setRespuesta(answerGraph(44L));
-        review.setEstado(EstadoRevisionManual.PENDIENTE);
-        review.setCreadoEn(CLOCK.instant().atZone(ZoneOffset.UTC).toLocalDateTime());
-        when(reviews.findById(55L)).thenReturn(Optional.of(review));
-        when(currentActor.usuarioId()).thenReturn(reviewerId);
-        when(users.findById(reviewerId)).thenReturn(Optional.of(reviewer));
+        Escenario e = escenario(2);
+        e.reviewerStubs();
 
-        ManualReviewService.PendingReviewView view = service.resolve(55L,
-                new ManualReviewService.ReviewCommand(new BigDecimal("7.50"), "Correcto", true));
+        ManualReviewService.PendingReviewView view = service.resolve(e.reviews.get(0).getId(),
+                new ManualReviewService.ReviewCommand(new BigDecimal("4.50"), "Correcto", true));
 
         assertThat(view.status()).isEqualTo("REVISADO");
-        assertThat(review.getPuntajeAsignado()).isEqualByComparingTo("7.50");
-        assertThat(review.getRevisadoPor()).isSameAs(reviewer);
-        verify(reviews).save(review);
+        assertThat(e.reviews.get(0).getPuntajeAsignado()).isEqualByComparingTo("4.50");
+        assertThat(e.reviews.get(0).getRevisadoPor()).isSameAs(e.reviewer);
+        verify(reviews).save(e.reviews.get(0));
         verify(audit).recordTrusted(Mockito.argThat(event -> event.action().equals("REVISION_MANUAL_GUARDADA")
                 && event.entity().equals("revision_manual_respuesta")
-                && event.entityId().equals("55")));
+                && event.entityId().equals(String.valueOf(e.reviews.get(0).getId()))));
+    }
+
+    @Test
+    void resolverUnaSolaRevisionAplicaSuPuntajeYSigueRequiriendoRevision() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("4.50"), "ok", true));
+
+        assertThat(e.gradingList.get(0).getPuntajeObtenido()).isEqualByComparingTo("4.50");
+        assertThat(e.gradingList.get(0).getEsCorrecta()).isTrue();
+        assertThat(e.gradingList.get(0).getRequiereRevisionManual()).isFalse();
+        assertThat(e.gradingList.get(1).getRequiereRevisionManual()).isTrue();
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("4.50");
+        assertThat(e.result.getCantidadCorrectas()).isEqualTo(1);
+        assertThat(e.result.getCantidadIncorrectas()).isEqualTo(1);
+        assertThat(e.result.getCantidadPendientesRevision()).isEqualTo(1);
+        assertThat(e.result.getRequiereRevisionManual()).isTrue();
+        assertThat(e.dimension.getRequiereRevisionManual()).isTrue();
+    }
+
+    @Test
+    void resolverTodasLasRevisionesIncluyeSusPuntajesYQuitaLaMarcaDeRevision() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("4.50"), "ok", true));
+        service.resolve(e.reviews.get(1).getId(), new ManualReviewService.ReviewCommand(BigDecimal.ZERO, "nada", true));
+
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("4.50");
+        assertThat(e.result.getCantidadCorrectas()).isEqualTo(1);
+        assertThat(e.result.getCantidadIncorrectas()).isEqualTo(1);
+        assertThat(e.result.getCantidadPendientesRevision()).isZero();
+        assertThat(e.result.getRequiereRevisionManual()).isFalse();
+        assertThat(e.dimension.getRequiereRevisionManual()).isFalse();
+        assertThat(e.gradingList.get(1).getEsCorrecta()).isFalse();
+        verify(results, Mockito.atLeastOnce()).save(e.result);
+    }
+
+    @Test
+    void volverAResolverUnaRevisionRevisadaRecalculaConElNuevoPuntaje() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("4.50"), "ok", true));
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("2.00"), "ajuste", true));
+
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("2.00");
+        assertThat(e.result.getCantidadPendientesRevision()).isEqualTo(1);
+    }
+
+    @Test
+    void observarNoAplicaPuntajeYSigueContandoComoPendiente() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+
+        ManualReviewService.PendingReviewView view = service.resolve(e.reviews.get(0).getId(),
+                new ManualReviewService.ReviewCommand(new BigDecimal("3.00"), "falta detalle", false));
+
+        assertThat(view.status()).isEqualTo("OBSERVADO");
+        assertThat(e.gradingList.get(0).getPuntajeObtenido()).isEqualByComparingTo("0");
+        assertThat(e.gradingList.get(0).getRequiereRevisionManual()).isTrue();
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+        assertThat(e.result.getCantidadPendientesRevision()).isEqualTo(2);
+        assertThat(e.result.getRequiereRevisionManual()).isTrue();
+    }
+
+    @Test
+    void observarUnaRevisionYaRevisadaRevierteElPuntajeAplicado() {
+        Escenario e = escenario(2);
+        e.reviewerStubs();
+
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("4.50"), "ok", true));
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(null, "revisar de nuevo", false));
+
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+        assertThat(e.result.getCantidadPendientesRevision()).isEqualTo(2);
+    }
+
+    @Test
+    void resolverSinResultadoDelIntentoResponde409() {
+        Escenario e = escenario(1);
+        e.reviewerStubs();
+        when(results.findByIntentoId(33L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resolve(e.reviews.get(0).getId(),
+                new ManualReviewService.ReviewCommand(new BigDecimal("1"), "x", true)))
+                .isInstanceOf(IllegalStateException.class);
+        verify(reviews, never()).save(Mockito.any());
+    }
+
+    @Test
+    void resolverValidaQueElPuntajeNoSeaNegativoNiSuperePuntajeDeLaClave() {
+        Escenario e = escenario(1);
+        e.reviewerStubs();
+
+        assertThatThrownBy(() -> service.resolve(e.reviews.get(0).getId(),
+                new ManualReviewService.ReviewCommand(new BigDecimal("-0.01"), "x", true)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.resolve(e.reviews.get(0).getId(),
+                new ManualReviewService.ReviewCommand(new BigDecimal("5.01"), "x", true)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> service.resolve(e.reviews.get(0).getId(),
+                new ManualReviewService.ReviewCommand(null, "x", true)))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(reviews, never()).save(Mockito.any());
+
+        // el maximo exacto es valido
+        service.resolve(e.reviews.get(0).getId(), new ManualReviewService.ReviewCommand(new BigDecimal("5.00"), "x", true));
+        assertThat(e.result.getPuntajeTotalDirecto()).isEqualByComparingTo("5.00");
+    }
+
+    @Test
+    void createPendingForAnswerEsIdempotente() {
+        RespuestaItem answer = answerGraph(44L);
+        RevisionManualRespuesta existing = new RevisionManualRespuesta();
+        existing.setId(9L);
+        existing.setRespuesta(answer);
+        existing.setEstado(EstadoRevisionManual.REVISADO);
+        existing.setCreadoEn(CLOCK.instant().atZone(ZoneOffset.UTC).toLocalDateTime());
+        when(answers.findById(44L)).thenReturn(Optional.of(answer));
+        when(reviews.findByRespuestaId(44L)).thenReturn(Optional.of(existing));
+
+        assertThat(service.createPendingForAnswer(44L).status()).isEqualTo("REVISADO");
+        verify(reviews, never()).save(Mockito.any());
+    }
+
+    /** Intento 33 con n respuestas de revision manual (puntaje maximo 5.00 cada una) y su resultado. */
+    private Escenario escenario(int n) {
+        Escenario e = new Escenario();
+        e.result = new Resultado();
+        e.result.setId(70L);
+        e.result.setPuntajeTotalDirecto(BigDecimal.ZERO);
+        e.result.setCantidadItems(n);
+        e.result.setCantidadCorrectas(0);
+        e.result.setCantidadIncorrectas(n);
+        e.result.setCantidadPendientesRevision(n);
+        e.result.setRequiereRevisionManual(true);
+        e.dimension = new ResultadoDimension();
+        e.dimension.setRequiereRevisionManual(true);
+        ReglaCalificacion regla = new ReglaCalificacion();
+        regla.setId(80L);
+        for (int i = 0; i < n; i++) {
+            RespuestaItem answer = answerGraph(44L + i);
+            answer.getItem().setId(22L + i);
+            e.result.setIntento(answer.getIntento());
+            CalificacionRespuesta grading = new CalificacionRespuesta();
+            grading.setRespuesta(answer);
+            grading.setReglaCalificacion(regla);
+            grading.setPuntajeObtenido(BigDecimal.ZERO);
+            grading.setEsCorrecta(false);
+            grading.setRequiereRevisionManual(true);
+            e.gradingList.add(grading);
+            RevisionManualRespuesta review = new RevisionManualRespuesta();
+            review.setId(55L + i);
+            review.setRespuesta(answer);
+            review.setEstado(EstadoRevisionManual.PENDIENTE);
+            review.setCreadoEn(CLOCK.instant().atZone(ZoneOffset.UTC).toLocalDateTime());
+            e.reviews.add(review);
+            when(reviews.findById(review.getId())).thenReturn(Optional.of(review));
+            ClaveRespuesta clave = new ClaveRespuesta();
+            clave.setPuntaje(new BigDecimal("5.00"));
+            when(keys.findFirstByReglaCalificacionIdAndItemId(80L, answer.getItem().getId()))
+                    .thenReturn(Optional.of(clave));
+        }
+        when(results.findByIntentoId(33L)).thenReturn(Optional.of(e.result));
+        when(attempts.findByIdForUpdate(33L)).thenReturn(Optional.of(e.result.getIntento()));
+        when(gradings.findByResultadoId(70L)).thenReturn(e.gradingList);
+        when(reviews.findByRespuestaIntentoId(33L)).thenReturn(e.reviews);
+        when(dimensionResults.findByResultadoId(70L)).thenReturn(List.of(e.dimension));
+        return e;
+    }
+
+    private final class Escenario {
+        final Usuario reviewer = new Usuario();
+        final List<CalificacionRespuesta> gradingList = new java.util.ArrayList<>();
+        final List<RevisionManualRespuesta> reviews = new java.util.ArrayList<>();
+        Resultado result;
+        ResultadoDimension dimension;
+
+        void reviewerStubs() {
+            UUID reviewerId = UUID.randomUUID();
+            reviewer.setId(reviewerId);
+            when(currentActor.usuarioId()).thenReturn(reviewerId);
+            when(users.findById(reviewerId)).thenReturn(Optional.of(reviewer));
+        }
     }
 
     @Test

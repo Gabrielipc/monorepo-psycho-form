@@ -12,6 +12,7 @@ import com.uam.psychoform.instrument.model.DimensionResultado;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
 import com.uam.psychoform.instrument.model.Baremo;
 import com.uam.psychoform.instrument.model.OpcionPuntajeDimension;
+import com.uam.psychoform.instrument.model.ReglaCalificacion;
 import com.uam.psychoform.instrument.model.RangoBaremo;
 import com.uam.psychoform.instrument.model.TipoEstrategiaCalificacion;
 import com.uam.psychoform.instrument.model.VersionTest;
@@ -20,11 +21,14 @@ import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.OpcionPuntajeDimensionRepository;
 import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
+import com.uam.psychoform.scoring.model.EstadoRevisionManual;
+import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
 import com.uam.psychoform.scoring.model.Resultado;
 import com.uam.psychoform.scoring.model.ResultadoDimension;
 import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
 import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
 import com.uam.psychoform.scoring.repository.ResultadoRepository;
+import com.uam.psychoform.scoring.repository.RevisionManualRespuestaRepository;
 import com.uam.psychoform.security.CurrentActor;
 import com.uam.psychoform.security.SecurityPermissions;
 import com.uam.psychoform.security.model.Usuario;
@@ -56,6 +60,7 @@ public class ClaveSimpleScoringService {
     private final RangoBaremoRepository rangosBaremo;
     private final CalificacionRespuestaRepository calificaciones;
     private final ResultadoDimensionRepository resultadosDimension;
+    private final RevisionManualRespuestaRepository revisiones;
     private final UsuarioRepository usuarios;
     private final CurrentActor currentActor;
     private final Clock clock;
@@ -65,7 +70,7 @@ public class ClaveSimpleScoringService {
             ClaveRespuestaLookupRepository claves, OpcionPuntajeDimensionRepository puntajesDimension,
             BaremoRepository baremos, RangoBaremoRepository rangosBaremo,
             CalificacionRespuestaRepository calificaciones, ResultadoDimensionRepository resultadosDimension,
-            UsuarioRepository usuarios, CurrentActor currentActor, Clock clock) {
+            RevisionManualRespuestaRepository revisiones, UsuarioRepository usuarios, CurrentActor currentActor, Clock clock) {
         this.intentos = intentos;
         this.resultados = resultados;
         this.respuestas = respuestas;
@@ -76,6 +81,7 @@ public class ClaveSimpleScoringService {
         this.rangosBaremo = rangosBaremo;
         this.calificaciones = calificaciones;
         this.resultadosDimension = resultadosDimension;
+        this.revisiones = revisiones;
         this.usuarios = usuarios;
         this.currentActor = currentActor;
         this.clock = clock;
@@ -84,7 +90,41 @@ public class ClaveSimpleScoringService {
     @Transactional
     @PreAuthorize(SecurityPermissions.CALIFICACION_EJECUTAR)
     public Resultado scoreAttempt(long intentoId) {
-        return resultados.findByIntentoId(intentoId).orElseGet(() -> calculate(intentoId));
+        return resultados.findByIntentoId(intentoId)
+                .map(this::ensurePendingReviews)
+                .orElseGet(() -> calculate(intentoId));
+    }
+
+    /**
+     * Recalificar no crea otro resultado (hay uno por intento): solo garantiza que cada calificacion con revision
+     * manual pendiente tenga su revision, sin duplicar ni tocar las ya existentes (incluidas las resueltas).
+     */
+    private Resultado ensurePendingReviews(Resultado resultado) {
+        List<CalificacionRespuesta> pending = calificaciones.findByResultadoId(resultado.getId()).stream()
+                .filter(c -> Boolean.TRUE.equals(c.getRequiereRevisionManual()))
+                .toList();
+        if (pending.isEmpty()) {
+            return resultado;
+        }
+        java.util.Set<Long> answersWithReview = revisiones
+                .findByRespuestaIdIn(pending.stream().map(c -> c.getRespuesta().getId()).toList()).stream()
+                .map(review -> review.getRespuesta().getId())
+                .collect(Collectors.toSet());
+        for (CalificacionRespuesta calificacion : pending) {
+            if (!answersWithReview.contains(calificacion.getRespuesta().getId())) {
+                createPendingReview(calificacion.getRespuesta(), calificacion.getReglaCalificacion());
+            }
+        }
+        return resultado;
+    }
+
+    private void createPendingReview(RespuestaItem respuesta, ReglaCalificacion regla) {
+        RevisionManualRespuesta review = new RevisionManualRespuesta();
+        review.setRespuesta(respuesta);
+        review.setReglaCalificacion(regla);
+        review.setEstado(EstadoRevisionManual.PENDIENTE);
+        review.setCreadoEn(LocalDateTime.now(clock));
+        revisiones.save(review);
     }
 
     private Resultado calculate(long intentoId) {
@@ -125,6 +165,11 @@ public class ClaveSimpleScoringService {
                         .collect(Collectors.groupingBy(row -> row.getOpcion().getId()));
         Map<Long, BigDecimal> directScoresByDimension = new java.util.LinkedHashMap<>();
         Map<Long, DimensionResultado> dimensionsById = new java.util.LinkedHashMap<>();
+        Map<Long, RevisionManualRespuesta> reviewsByAnswer = answerIds.isEmpty()
+                ? Map.of()
+                : revisiones.findByRespuestaIdIn(answerIds).stream()
+                        .collect(Collectors.toMap(review -> review.getRespuesta().getId(), Function.identity(),
+                                (first, second) -> first));
 
         Resultado resultado = new Resultado();
         resultado.setIntento(intento);
@@ -151,18 +196,33 @@ public class ClaveSimpleScoringService {
                     .map(o -> o.getId())
                     .toList();
             accumulateDimensionScores(selectedOptionIds, dimensionScoresByOption, directScoresByDimension, dimensionsById);
-            boolean manualReview = Boolean.TRUE.equals(clave.getRequiereRevisionManual())
+            boolean manualFlag = Boolean.TRUE.equals(clave.getRequiereRevisionManual())
                     || Boolean.TRUE.equals(respuesta.getRequiereRevisionManual());
+            RevisionManualRespuesta review = reviewsByAnswer.get(respuesta.getId());
+            // Una revision ya resuelta se conserva y su puntaje se aplica al calcular.
+            boolean resolved = manualFlag && review != null && review.getEstado() == EstadoRevisionManual.REVISADO
+                    && review.getPuntajeAsignado() != null;
             // Un item con revision manual no se autocalifica: queda en 0 hasta que se resuelva la revision.
-            boolean correct = !manualReview && ClaveCorrectnessEvaluator.isCorrect(
-                    respuesta.getItem().getTipoRespuesta(), clave,
-                    selections.stream()
-                            .map(s -> new ClaveCorrectnessEvaluator.SelectedOption(s.getOpcion().getId(),
-                                    s.getOpcion().getCodigoOpcion()))
-                            .toList(),
-                    optionSetsByKey.get(clave.getId()), respuesta.getRespuestaTextoAbierto(),
-                    respuesta.getRespuestaNumerica());
-            BigDecimal score = correct ? clave.getPuntaje() : BigDecimal.ZERO;
+            boolean manualReview = manualFlag && !resolved;
+            boolean correct;
+            BigDecimal score;
+            if (resolved) {
+                score = review.getPuntajeAsignado();
+                correct = score.signum() > 0;
+            } else {
+                correct = !manualFlag && ClaveCorrectnessEvaluator.isCorrect(
+                        respuesta.getItem().getTipoRespuesta(), clave,
+                        selections.stream()
+                                .map(s -> new ClaveCorrectnessEvaluator.SelectedOption(s.getOpcion().getId(),
+                                        s.getOpcion().getCodigoOpcion()))
+                                .toList(),
+                        optionSetsByKey.get(clave.getId()), respuesta.getRespuestaTextoAbierto(),
+                        respuesta.getRespuestaNumerica());
+                score = correct ? clave.getPuntaje() : BigDecimal.ZERO;
+            }
+            if (manualReview && review == null) {
+                createPendingReview(respuesta, clave.getReglaCalificacion());
+            }
             resultado.setCantidadItems(resultado.getCantidadItems() + 1);
             resultado.setPuntajeTotalDirecto(resultado.getPuntajeTotalDirecto().add(score));
             resultado.setCantidadCorrectas(resultado.getCantidadCorrectas() + (correct ? 1 : 0));
