@@ -91,6 +91,14 @@ public class InstrumentController {
         return ApiResponse.ok(admin.getCloneTemplate(id));
     }
 
+    @GetMapping("/test-versions/{id}/configuration")
+    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    public ApiResponse<?> getConfiguration(@PathVariable Long id) {
+        InstrumentAdminService.VersionConfiguration configuration = admin.getConfiguration(id);
+        return ApiResponse.ok(new VersionConfigurationDocumentDTO(EntityView.of(configuration.version()),
+                configuration.subtests()));
+    }
+
     @GetMapping("/items/{id}/options")
     @PreAuthorize(SecurityPermissions.TEST_LEER)
     public ApiResponse<?> getOptions(@PathVariable Long id) {

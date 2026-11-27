@@ -313,22 +313,58 @@ public class InstrumentAdminService {
     public SubtestCloneTemplateDTO getCloneTemplate(long subtestId) {
         Subtest subtest = find(Subtest.class, subtestId);
         List<Item> items = listItems(subtestId);
+        return toSubtestTemplate(subtest, items, loadItemGraph(items));
+    }
+
+    /**
+     * B7: documento de configuracion completo de una version (subtests ordenados por orden con la misma forma que
+     * {@link #getCloneTemplate}). Carga ordenes, opciones, imagenes y claves de toda la version con consultas en
+     * lote, sin consultas por subtest.
+     */
+    @PreAuthorize(SecurityPermissions.TEST_LEER)
+    public VersionConfiguration getConfiguration(long versionId) {
+        VersionTest version = find(VersionTest.class, versionId);
+        List<Subtest> subtests = em.createQuery(
+                "SELECT s FROM Subtest s WHERE s.versionTest.id = :versionId ORDER BY s.numeroOrden ASC, s.id ASC",
+                Subtest.class).setParameter("versionId", versionId).getResultList();
+        if (subtests.isEmpty()) {
+            return new VersionConfiguration(version, List.of());
+        }
+        List<Long> subtestIds = subtests.stream().map(Subtest::getId).toList();
+        List<Item> allItems = em.createQuery("""
+                SELECT i FROM Item i
+                WHERE i.subtest.id IN :subtestIds
+                ORDER BY i.subtest.id ASC, i.numeroOrden ASC
+                """, Item.class).setParameter("subtestIds", subtestIds).getResultList();
+        Map<Long, List<Item>> itemsBySubtest = new LinkedHashMap<>();
+        for (Item item : allItems) {
+            itemsBySubtest.computeIfAbsent(item.getSubtest().getId(), ignored -> new ArrayList<>()).add(item);
+        }
+        ItemGraph graph = loadItemGraph(allItems);
+        List<SubtestCloneTemplateDTO> templates = subtests.stream()
+                .map(subtest -> toSubtestTemplate(subtest, itemsBySubtest.getOrDefault(subtest.getId(), List.of()),
+                        graph))
+                .toList();
+        return new VersionConfiguration(version, templates);
+    }
+
+    private ItemGraph loadItemGraph(List<Item> items) {
         List<Long> itemIds = items.stream().map(Item::getId).toList();
         Map<Long, List<OpcionItem>> optionsByItem = optionsByItem(itemIds);
-        Map<Long, List<SubtestCloneTemplateDTO.ImageTemplate>> itemImagesByItem = cloneItemImages(itemIds);
         List<Long> optionIds = optionsByItem.values().stream()
                 .flatMap(List::stream)
                 .map(OpcionItem::getId)
                 .toList();
-        Map<Long, List<SubtestCloneTemplateDTO.ImageTemplate>> optionImagesByOption = cloneOptionImages(optionIds);
-        Map<Long, ClaveRespuesta> keysByItem = answerKeysByItem(itemIds);
+        return new ItemGraph(optionsByItem, cloneItemImages(itemIds), cloneOptionImages(optionIds),
+                answerKeysByItem(itemIds));
+    }
 
+    private SubtestCloneTemplateDTO toSubtestTemplate(Subtest subtest, List<Item> items, ItemGraph graph) {
         List<SubtestCloneTemplateDTO.ItemTemplate> itemTemplates = items.stream()
-                .map(item -> toItemTemplate(item, optionsByItem.getOrDefault(item.getId(), List.of()),
-                        itemImagesByItem.getOrDefault(item.getId(), List.of()), optionImagesByOption,
-                        keysByItem.get(item.getId())))
+                .map(item -> toItemTemplate(item, graph.optionsByItem().getOrDefault(item.getId(), List.of()),
+                        graph.itemImagesByItem().getOrDefault(item.getId(), List.of()),
+                        graph.optionImagesByOption(), graph.keysByItem().get(item.getId())))
                 .toList();
-
         Short strategyId = subtest.getEstrategiaCalificacion() == null
                 ? null
                 : subtest.getEstrategiaCalificacion().getId();
@@ -1104,6 +1140,16 @@ public class InstrumentAdminService {
 
     public record BaremoRangeCommand(BigDecimal minScore, BigDecimal maxScore, BigDecimal percentile, String category,
             String interpretation, String recommendation, Integer order) {
+    }
+
+    /** Documento de configuracion de una version: la version y sus subtests con la forma de clone-template. */
+    public record VersionConfiguration(VersionTest version, List<SubtestCloneTemplateDTO> subtests) {
+    }
+
+    private record ItemGraph(Map<Long, List<OpcionItem>> optionsByItem,
+            Map<Long, List<SubtestCloneTemplateDTO.ImageTemplate>> itemImagesByItem,
+            Map<Long, List<SubtestCloneTemplateDTO.ImageTemplate>> optionImagesByOption,
+            Map<Long, ClaveRespuesta> keysByItem) {
     }
 
     private record PendingAnswerKey(Item item, VersionConfigurationRequest.AnswerKeyDraft draft) {
