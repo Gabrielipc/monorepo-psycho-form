@@ -3,6 +3,7 @@ package com.uam.psychoform.controller;
 import com.uam.psychoform.assessment.service.LoteDemasiadoGrandeException;
 import com.uam.psychoform.assessment.service.ParticipantConflictException;
 import com.uam.psychoform.dto.ApiResponse;
+import com.uam.psychoform.storage.StorageUnavailableException;
 
 import jakarta.persistence.EntityNotFoundException;
 import java.sql.SQLException;
@@ -91,6 +92,12 @@ public class GlobalExceptionHandler {
                     .body(ApiResponse.error("CONFLICT", "Conflicto de integridad de datos"));
         }
         throw ex;
+    }
+
+    @ExceptionHandler(StorageUnavailableException.class)
+    ResponseEntity<ApiResponse<Void>> storageUnavailable(StorageUnavailableException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResponse.error("SERVICE_UNAVAILABLE", "El almacenamiento no esta disponible"));
     }
 
     private boolean isIntegrityViolation(Throwable ex) {
