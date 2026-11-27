@@ -176,7 +176,7 @@ El frontend recorre todas las páginas de `/participantes` y filtra en cliente (
 `ParticipantAnswerService.bulkSyncAnswers` devuelve `RECHAZADA` por ítem (p. ej. `TIEMPO_AGOTADO`, tipo incompatible, ítem inexistente) solo en la respuesta al participante. No se persisten ni llegan al staff.
 
 ### Cambios
-1. Migración `20261126000400_respuesta_rechazada.sql` (idempotente):
+1. Migración `20261126000500_respuesta_rechazada.sql` (idempotente):
    ```sql
    CREATE TABLE IF NOT EXISTS respuesta_rechazada (
      respuesta_rechazada_id BIGSERIAL PRIMARY KEY,

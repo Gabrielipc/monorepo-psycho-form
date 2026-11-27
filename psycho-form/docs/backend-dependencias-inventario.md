@@ -32,19 +32,21 @@ Rutas relativas a `psycho-form/psychoform/src/main/java/com/uam/psychoform/`, sa
 
 ## Plan de ejecución
 
+Nota: B12 usa `20261126000300` en lugar del `20261125000100` de su prompt. Con este último quedaría fuera de orden respecto de migraciones ya aplicadas.
+
 Cada tarea usa una BD aislada (`mkdb.sh <db> <migrations>`, con `BFA_DB_URL`). Eso permite paralelizar en worktrees las tareas que tocan servicios distintos.
 
 | Prioridad | Tarea | B | Servicio principal | Migración reservada |
 |---|---|---|---|---|
 | P1 | T1 → T2 (secuencial) | B22 → B23 | `ClaveSimpleScoringService`, `ManualReviewService` | `20261126000200_revision_manual_unica.sql` (si hace falta) |
 | P1 | T3 (en paralelo con T1/T2) | B13 + B18 | `InstrumentAdminService` | `20261126000100_orden_deferrable.sql` |
-| P2 | T4 | B12 | `SecurityPermissions`, `InstrumentController`/servicio de catálogo | `20261125000100_rbac_catalogo_y_supervision.sql` |
-| P2 | T5 | B14 | nuevo `AttemptQueryService` (reporting) | `20261126000300_idx_intento_estado_fin.sql` |
+| P2 | T4 | B12 | `SecurityPermissions`, `InstrumentController`/servicio de catálogo | `20261126000300_rbac_catalogo_y_supervision.sql` |
+| P2 | T5 | B14 | nuevo `AttemptQueryService` (reporting) | `20261126000400_idx_intento_estado_fin.sql` |
 | P2 | T6 | B15 + B4 | `SessionManagementService` | — |
 | P2 | T7 | B16 | `ParticipanteService` | — |
 | P2 | T8 | B21 + B2 | `ParticipantAccessService`, `ParticipantRuntimeService` | — |
 | P2 | T9 | B19 | `ReportRegistryService` | — |
-| P3 | T10 | B3 + B17 + B11 | `ParticipantRuntimeService` (monitor), `ParticipantAnswerService` | `20261126000400_respuesta_rechazada.sql` |
-| P3 | T11 | B20 + B8 | `InstrumentImageService`, `ItemImageStorageService` | `20261126000500_recurso_clave_subida.sql` |
+| P3 | T10 | B3 + B17 + B11 | `ParticipantRuntimeService` (monitor), `ParticipantAnswerService` | `20261126000500_respuesta_rechazada.sql` |
+| P3 | T11 | B20 + B8 | `InstrumentImageService`, `ItemImageStorageService` | `20261126000600_recurso_clave_subida.sql` |
 | P3 | T12 | B7 + B9 | `InstrumentAdminService` (versión) | — |
 | P3 | T13 | B10 | `ParticipanteService`, `SessionManagementService`, `AuditLogService` | — |
