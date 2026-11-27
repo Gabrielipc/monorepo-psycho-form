@@ -16,6 +16,7 @@ public final class SecurityPermissions {
 
     public static final String PARTICIPANTE_LEER = "hasAuthority('PERM_PARTICIPANTE_LEER')";
     public static final String PARTICIPANTE_CREAR = "hasAuthority('PERM_PARTICIPANTE_CREAR')";
+    public static final String PARTICIPANTE_MODIFICAR = "hasAuthority('PERM_PARTICIPANTE_MODIFICAR')";
     public static final String PARTICIPANTE_ELIMINAR = "hasAuthority('PERM_PARTICIPANTE_ELIMINAR')";
     public static final String PARTICIPANTE_ACCESO_GESTIONAR = "hasAuthority('PERM_PARTICIPANTE_ACCESO_GESTIONAR')";
 

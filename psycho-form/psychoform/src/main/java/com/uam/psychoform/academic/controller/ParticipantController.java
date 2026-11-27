@@ -1,6 +1,7 @@
 package com.uam.psychoform.academic.controller;
 
 import com.uam.psychoform.academic.dto.ParticipantRequest;
+import com.uam.psychoform.academic.dto.ParticipantUpdateRequest;
 
 import com.uam.psychoform.academic.model.Participante;
 import com.uam.psychoform.academic.service.ParticipanteService;
@@ -48,6 +49,23 @@ public class ParticipantController {
                 request.carreraId(),
                 request.cohorteId(),
                 request.grupoAcademicoId()));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize(SecurityPermissions.PARTICIPANTE_MODIFICAR)
+    public ApiResponse<?> update(
+            @PathVariable UUID id,
+            @Valid @RequestBody ParticipantUpdateRequest request) {
+        return ApiResponse.ok(EntityView.of(service.actualizar(
+                id,
+                request.code(),
+                request.firstNames(),
+                request.lastNames(),
+                request.fechaNacimiento(),
+                request.sexoId(),
+                request.carreraId(),
+                request.cohorteId(),
+                request.grupoAcademicoId())));
     }
 
     @DeleteMapping("/{id}")

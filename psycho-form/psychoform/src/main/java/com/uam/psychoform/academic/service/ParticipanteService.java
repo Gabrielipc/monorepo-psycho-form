@@ -10,6 +10,7 @@ import com.uam.psychoform.security.SecurityPermissions;
 import com.uam.psychoform.security.model.EstadoGeneral;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import org.springframework.data.domain.Page;
@@ -58,8 +59,7 @@ public class ParticipanteService {
 
     @PreAuthorize(SecurityPermissions.PARTICIPANTE_LEER)
     public Participante obtener(UUID participanteId) {
-        return repository.findById(participanteId)
-                .orElseThrow(() -> new EntityNotFoundException("Participante no encontrado: " + participanteId));
+        return buscarPorId(participanteId);
     }
 
     @Transactional
@@ -87,7 +87,7 @@ public class ParticipanteService {
             String codigoParticipante,
             String nombres,
             String apellidos,
-            java.time.LocalDate fechaNacimiento,
+            LocalDate fechaNacimiento,
             Short sexoId,
             Short carreraId,
             Short cohorteId,
@@ -105,18 +105,31 @@ public class ParticipanteService {
         participante.setEstado(EstadoGeneral.ACTIVO);
         participante.setCreadoEn(ahora);
         participante.setActualizadoEn(ahora);
-        if (sexoId != null) {
-            participante.setSexo(sexoRepository.getReferenceById(sexoId));
+        asignarRelacionesAcademicas(participante, sexoId, carreraId, cohorteId, grupoAcademicoId);
+        return repository.save(participante);
+    }
+
+    @Transactional
+    @PreAuthorize(SecurityPermissions.PARTICIPANTE_MODIFICAR)
+    public Participante actualizar(
+            UUID participanteId,
+            String codigoParticipante,
+            String nombres,
+            String apellidos,
+            LocalDate fechaNacimiento,
+            Short sexoId,
+            Short carreraId,
+            Short cohorteId,
+            Short grupoAcademicoId) {
+        Participante participante = buscarPorId(participanteId);
+        if (codigoParticipante != null && !codigoParticipante.equals(participante.getCodigoParticipante())) {
+            throw new IllegalArgumentException("El código del participante no es editable");
         }
-        if (carreraId != null) {
-            participante.setCarrera(carreraRepository.getReferenceById(carreraId));
-        }
-        if (cohorteId != null) {
-            participante.setCohorte(cohorteRepository.getReferenceById(cohorteId));
-        }
-        if (grupoAcademicoId != null) {
-            participante.setGrupoAcademico(grupoRepository.getReferenceById(grupoAcademicoId));
-        }
+        participante.setNombres(nombres);
+        participante.setApellidos(apellidos);
+        participante.setFechaNacimiento(fechaNacimiento);
+        participante.setActualizadoEn(LocalDateTime.now(clock));
+        asignarRelacionesAcademicas(participante, sexoId, carreraId, cohorteId, grupoAcademicoId);
         return repository.save(participante);
     }
 
@@ -127,5 +140,22 @@ public class ParticipanteService {
         participante.setEstado(EstadoGeneral.INACTIVO);
         participante.setActualizadoEn(LocalDateTime.now(clock));
         repository.save(participante);
+    }
+
+    private Participante buscarPorId(UUID participanteId) {
+        return repository.findById(participanteId)
+                .orElseThrow(() -> new EntityNotFoundException("Participante no encontrado: " + participanteId));
+    }
+
+    private void asignarRelacionesAcademicas(
+            Participante participante,
+            Short sexoId,
+            Short carreraId,
+            Short cohorteId,
+            Short grupoAcademicoId) {
+        participante.setSexo(sexoId != null ? sexoRepository.getReferenceById(sexoId) : null);
+        participante.setCarrera(carreraId != null ? carreraRepository.getReferenceById(carreraId) : null);
+        participante.setCohorte(cohorteId != null ? cohorteRepository.getReferenceById(cohorteId) : null);
+        participante.setGrupoAcademico(grupoAcademicoId != null ? grupoRepository.getReferenceById(grupoAcademicoId) : null);
     }
 }
