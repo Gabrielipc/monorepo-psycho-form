@@ -35,6 +35,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -105,6 +106,7 @@ public class ClaveSimpleScoringService {
                 .orElseThrow(() -> new EntityNotFoundException("Usuario autenticado no encontrado: " + actorId));
         Map<Long, ClaveRespuesta> keysByItem = claves.findOfficialKeysByVersionId(version.getId()).stream()
                 .collect(Collectors.toMap(c -> c.getItem().getId(), Function.identity()));
+        Map<Long, Set<Long>> optionSetsByKey = loadOptionSets(keysByItem.values());
         List<RespuestaItem> attemptAnswers = respuestas.findByIntentoIdWithItem(intentoId);
         List<Long> answerIds = attemptAnswers.stream().map(RespuestaItem::getId).toList();
         Map<Long, List<OpcionSeleccionadaRespuesta>> selectionsByAnswer = answerIds.isEmpty()
@@ -143,18 +145,29 @@ public class ClaveSimpleScoringService {
             if (clave == null) {
                 continue;
             }
-            List<Long> selectedOptionIds = selectionsByAnswer.getOrDefault(respuesta.getId(), List.of()).stream()
+            List<OpcionSeleccionadaRespuesta> selections = selectionsByAnswer.getOrDefault(respuesta.getId(), List.of());
+            List<Long> selectedOptionIds = selections.stream()
                     .map(OpcionSeleccionadaRespuesta::getOpcion)
                     .map(o -> o.getId())
                     .toList();
             accumulateDimensionScores(selectedOptionIds, dimensionScoresByOption, directScoresByDimension, dimensionsById);
-            boolean correct = clave.getOpcionCorrecta() != null && selectedOptionIds.contains(clave.getOpcionCorrecta().getId());
+            boolean manualReview = Boolean.TRUE.equals(clave.getRequiereRevisionManual())
+                    || Boolean.TRUE.equals(respuesta.getRequiereRevisionManual());
+            // Un item con revision manual no se autocalifica: queda en 0 hasta que se resuelva la revision.
+            boolean correct = !manualReview && ClaveCorrectnessEvaluator.isCorrect(
+                    respuesta.getItem().getTipoRespuesta(), clave,
+                    selections.stream()
+                            .map(s -> new ClaveCorrectnessEvaluator.SelectedOption(s.getOpcion().getId(),
+                                    s.getOpcion().getCodigoOpcion()))
+                            .toList(),
+                    optionSetsByKey.get(clave.getId()), respuesta.getRespuestaTextoAbierto(),
+                    respuesta.getRespuestaNumerica());
             BigDecimal score = correct ? clave.getPuntaje() : BigDecimal.ZERO;
             resultado.setCantidadItems(resultado.getCantidadItems() + 1);
             resultado.setPuntajeTotalDirecto(resultado.getPuntajeTotalDirecto().add(score));
             resultado.setCantidadCorrectas(resultado.getCantidadCorrectas() + (correct ? 1 : 0));
             resultado.setCantidadIncorrectas(resultado.getCantidadIncorrectas() + (correct ? 0 : 1));
-            if (Boolean.TRUE.equals(clave.getRequiereRevisionManual())) {
+            if (manualReview) {
                 resultado.setCantidadPendientesRevision(resultado.getCantidadPendientesRevision() + 1);
                 resultado.setRequiereRevisionManual(true);
             }
@@ -165,13 +178,29 @@ public class ClaveSimpleScoringService {
             calificacion.setOpcion(clave.getOpcionCorrecta());
             calificacion.setPuntajeObtenido(score);
             calificacion.setEsCorrecta(correct);
-            calificacion.setRequiereRevisionManual(Boolean.TRUE.equals(clave.getRequiereRevisionManual()));
+            calificacion.setRequiereRevisionManual(manualReview);
             calificacion.setCreadoEn(LocalDateTime.now(clock));
             calificaciones.save(calificacion);
         }
         createDimensionResults(resultado, version.getId(), directScoresByDimension, dimensionsById);
         resultados.save(resultado);
         return resultado;
+    }
+
+    private Map<Long, Set<Long>> loadOptionSets(java.util.Collection<ClaveRespuesta> keys) {
+        List<Long> keyIds = keys.stream()
+                .filter(key -> key.getId() != null)
+                .map(ClaveRespuesta::getId)
+                .toList();
+        if (keyIds.isEmpty()) {
+            return java.util.Collections.emptyMap();
+        }
+        Map<Long, Set<Long>> optionIdsByKey = new java.util.HashMap<>();
+        for (Object[] row : claves.findOptionSetRowsByKeyIds(keyIds)) {
+            optionIdsByKey.computeIfAbsent(((Number) row[0]).longValue(), id -> new java.util.HashSet<>())
+                    .add(((Number) row[1]).longValue());
+        }
+        return optionIdsByKey;
     }
 
     private void accumulateDimensionScores(List<Long> selectedOptionIds,

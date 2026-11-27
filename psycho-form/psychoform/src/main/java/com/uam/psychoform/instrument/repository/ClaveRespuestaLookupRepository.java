@@ -22,4 +22,12 @@ public interface ClaveRespuestaLookupRepository extends JpaRepository<ClaveRespu
             """)
     List<ClaveRespuesta> findOfficialKeysByVersionIdAndEstados(Long versionTestId,
             Collection<EstadoConfiguracion> estados);
+
+    /** Filas {claveId, opcionId} del conjunto correcto (claves con usa_conjunto_opciones, items OPCION_MULTIPLE). */
+    @Query(value = """
+            select clave_respuesta_id, opcion_id
+            from clave_respuesta_opcion
+            where clave_respuesta_id in (:claveIds)
+            """, nativeQuery = true)
+    List<Object[]> findOptionSetRowsByKeyIds(Collection<Long> claveIds);
 }

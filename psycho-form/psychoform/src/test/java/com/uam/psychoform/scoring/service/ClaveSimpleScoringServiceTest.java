@@ -23,6 +23,7 @@ import com.uam.psychoform.instrument.model.Item;
 import com.uam.psychoform.instrument.model.OpcionItem;
 import com.uam.psychoform.instrument.model.ReglaCalificacion;
 import com.uam.psychoform.instrument.model.TipoEstrategiaCalificacion;
+import com.uam.psychoform.instrument.model.TipoRespuesta;
 import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.BaremoRepository;
@@ -127,6 +128,151 @@ class ClaveSimpleScoringServiceTest {
 
         assertThatThrownBy(() -> service.scoreAttempt(7L)).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("finalizado");
+    }
+
+    // ---- B22: correccion segun el tipo de respuesta ----
+
+    @Test
+    void opcionMultipleConCodigosEsperadosEsCorrectaSoloConConjuntoIgual() {
+        ClaveRespuesta clave = claveBase(null, new BigDecimal("3.00"));
+        clave.setTextoEsperado(" b, a ,A,");
+
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("A", "B"), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("3.00");
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("a", "b"), null, null).getCantidadCorrectas())
+                .isEqualTo(1);
+        // subconjunto
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("A"), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+        // superconjunto
+        Resultado superconjunto = scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("A", "B", "C"), null, null);
+        assertThat(superconjunto.getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+        assertThat(superconjunto.getCantidadIncorrectas()).isEqualTo(1);
+        // sin seleccion
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of(), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+    }
+
+    @Test
+    void opcionMultipleConConjuntoEnTablaUsaLosIdsDeOpcion() {
+        ClaveRespuesta clave = claveBase(null, new BigDecimal("2.00"));
+        clave.setId(900L);
+        when(claves.findOptionSetRowsByKeyIds(List.of(900L)))
+                .thenReturn(List.of(new Object[] {900L, 1L}, new Object[] {900L, 2L}));
+
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("A", "B"), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("2.00");
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("A"), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+        assertThat(scoreOne(TipoRespuesta.OPCION_MULTIPLE, clave, List.of("A", "B", "C"), null, null)
+                .getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void numericaEsCorrectaHastaElBordeDeLaTolerancia() {
+        ClaveRespuesta clave = claveBase(null, new BigDecimal("5.00"));
+        clave.setValorNumericoEsperado(new BigDecimal("10.0000"));
+        clave.setToleranciaNumerica(new BigDecimal("0.5000"));
+
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("10")).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("5.00");
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("10.5")).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("5.00");
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("9.5")).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("5.00");
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("10.5001")).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("9.4999")).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+        // sin respuesta
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+    }
+
+    @Test
+    void numericaSinToleranciaExigeValorExacto() {
+        ClaveRespuesta clave = claveBase(null, new BigDecimal("1.00"));
+        clave.setValorNumericoEsperado(new BigDecimal("3.0000"));
+
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("3.00")).getCantidadCorrectas())
+                .isEqualTo(1);
+        assertThat(scoreOne(TipoRespuesta.NUMERICA, clave, List.of(), null, new BigDecimal("3.01")).getCantidadCorrectas())
+                .isZero();
+    }
+
+    @Test
+    void textoAbiertoSeComparaNormalizadoSinRevisionManual() {
+        ClaveRespuesta clave = claveBase(null, new BigDecimal("4.00"));
+        clave.setTextoEsperado("  Árbol   de la Vida ");
+
+        assertThat(scoreOne(TipoRespuesta.TEXTO_ABIERTO, clave, List.of(), "arbol DE   la vida", null)
+                .getPuntajeTotalDirecto()).isEqualByComparingTo("4.00");
+        assertThat(scoreOne(TipoRespuesta.TEXTO_ABIERTO, clave, List.of(), "arbol de vida", null)
+                .getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+        assertThat(scoreOne(TipoRespuesta.TEXTO_ABIERTO, clave, List.of(), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+    }
+
+    @Test
+    void opcionUnicaConservaElComportamientoPorOpcionCorrecta() {
+        Item item = item(10L);
+        OpcionItem correcta = opcion(1L, item);
+        correcta.setCodigoOpcion("A");
+        ClaveRespuesta clave = clave(item, correcta, new BigDecimal("1.00"));
+
+        assertThat(scoreOne(TipoRespuesta.OPCION_UNICA, clave, List.of("A"), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("1.00");
+        assertThat(scoreOne(TipoRespuesta.OPCION_UNICA, clave, List.of("B"), null, null).getPuntajeTotalDirecto())
+                .isEqualByComparingTo("0");
+    }
+
+    @Test
+    void itemConRevisionManualNoSeAutocalificaYQuedaPendiente() {
+        ClaveRespuesta clave = claveBase(null, new BigDecimal("4.00"));
+        clave.setTextoEsperado("hola");
+        clave.setRequiereRevisionManual(true);
+
+        Resultado resultado = scoreOne(TipoRespuesta.TEXTO_ABIERTO, clave, List.of(), "hola", null);
+
+        assertThat(resultado.getPuntajeTotalDirecto()).isEqualByComparingTo("0");
+        assertThat(resultado.getCantidadPendientesRevision()).isEqualTo(1);
+        assertThat(resultado.getRequiereRevisionManual()).isTrue();
+    }
+
+    /** Califica un intento con una sola respuesta. Las opciones se identifican por codigo: A=1, B=2, C=3. */
+    private Resultado scoreOne(TipoRespuesta tipo, ClaveRespuesta clave, List<String> selectedCodes, String text,
+            BigDecimal number) {
+        Item item = clave.getItem();
+        item.setTipoRespuesta(tipo);
+        RespuestaItem respuesta = new RespuestaItem();
+        respuesta.setId(30L);
+        respuesta.setItem(item);
+        respuesta.setRespuestaTextoAbierto(text);
+        respuesta.setRespuestaNumerica(number);
+        respuesta.setRequiereRevisionManual(false);
+        List<OpcionSeleccionadaRespuesta> selections = selectedCodes.stream().map(code -> {
+            OpcionItem opcion = opcion((long) (code.toUpperCase().charAt(0) - 'A' + 1), item);
+            opcion.setCodigoOpcion(code);
+            OpcionSeleccionadaRespuesta selection = new OpcionSeleccionadaRespuesta();
+            selection.setRespuesta(respuesta);
+            selection.setOpcion(opcion);
+            return selection;
+        }).toList();
+        UUID actorId = UUID.randomUUID();
+        Usuario actor = new Usuario();
+        actor.setId(actorId);
+        when(resultados.findByIntentoId(7L)).thenReturn(Optional.empty());
+        when(intentos.findByIdForUpdate(7L)).thenReturn(Optional.of(intentoPublicado()));
+        when(currentActor.usuarioId()).thenReturn(actorId);
+        when(usuarios.findById(actorId)).thenReturn(Optional.of(actor));
+        when(respuestas.findByIntentoIdWithItem(7L)).thenReturn(List.of(respuesta));
+        when(opcionesSeleccionadas.findByRespuestaIdIn(List.of(30L))).thenReturn(selections);
+        when(claves.findOfficialKeysByVersionId(100L)).thenReturn(List.of(clave));
+        return service.scoreAttempt(7L);
+    }
+
+    private static ClaveRespuesta claveBase(OpcionItem correcta, BigDecimal puntaje) {
+        return clave(item(10L), correcta, puntaje);
     }
 
     private static IntentoTest intentoPublicado() {
