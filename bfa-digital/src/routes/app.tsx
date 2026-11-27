@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { createFileRoute, Outlet, Link, redirect, useNavigate, useLocation, useRouter } from "@tanstack/react-router";
 import { useStaffAuth } from "../store/staffAuth";
 import { ensureStaffUser } from "../store/ensureStaffUser";
-import { Brand } from "../app/components/brand";
+import { Brand, APP_NAME } from "../app/components/brand";
 import {
   LogOut, Bell, Search,
 } from "lucide-react";
@@ -87,7 +87,7 @@ function AppLayout() {
     if (path.includes("/app/usuarios")) return { t: "Usuarios", s: "Gestión de cuentas y accesos" };
     if (path.includes("/app/roles")) return { t: "Roles y Permisos", s: "Matriz de privilegios del sistema" };
     if (path.includes("/app/respaldos")) return { t: "Respaldos y restauración", s: "Base de datos e integridad del sistema" };
-    return { t: "BFA Digital Portal", s: "Módulo interno de control" };
+    return { t: APP_NAME, s: "Sistema Integrado de Aplicación de Tests" };
   };
 
   const headerInfo = getHeaderInfo(location.pathname);
@@ -95,17 +95,21 @@ function AppLayout() {
   return (
     <div className="flex h-screen w-screen bg-muted/40 overflow-hidden">
       {/* Sidebar - Desktop */}
-      <aside className="hidden md:flex w-64 shrink-0 flex-col bg-primary text-primary-foreground">
-        <div className="p-4 border-b border-white/10">
+      <aside className="hidden md:flex w-68 shrink-0 flex-col gap-4 bg-sidebar text-sidebar-foreground p-4">
+        <div className="px-1 pt-1 pb-2">
           <Brand light />
         </div>
-        <nav className="flex-1 overflow-y-auto p-3 space-y-5">
+        {/* Navegación en tarjeta blanca, como el menú de UAM Virtual */}
+        <nav
+          aria-label="Navegación principal"
+          className="flex-1 overflow-y-auto rounded-lg bg-sidebar-panel text-sidebar-panel-foreground shadow-md p-2 space-y-4"
+        >
           {NAV_GROUPS.map((g) => {
             const items = visibleNavItems(g.items, hasAnyPermission);
             if (!items.length) return null;
             return (
               <div key={g.group}>
-                <div className="px-2 text-[10px] uppercase font-bold tracking-wider text-white/50 mb-1">{g.group}</div>
+                <div className="px-3 pt-1 text-[10px] uppercase font-bold tracking-wider text-text-tertiary mb-1">{g.group}</div>
                 <div className="space-y-0.5">
                   {items.map((i) => {
                     const Icon = i.icon;
@@ -113,11 +117,11 @@ function AppLayout() {
                       <Link
                         key={i.to}
                         to={i.to}
-                        activeProps={{ className: "bg-white/15 text-white" }}
-                        inactiveProps={{ className: "text-white/80 hover:bg-white/10 hover:text-white" }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition font-medium"
+                        activeProps={{ className: "bg-sidebar-accent text-sidebar-accent-foreground font-semibold" }}
+                        inactiveProps={{ className: "hover:bg-muted hover:text-foreground" }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition font-medium focus-visible:outline-2 focus-visible:outline-sidebar-ring"
                       >
-                        <Icon className="h-4 w-4" />
+                        <Icon className="h-4 w-4 shrink-0" />
                         {i.label}
                       </Link>
                     );
@@ -127,24 +131,25 @@ function AppLayout() {
             );
           })}
         </nav>
-        
+
         {/* Perfil del Usuario en Sidebar */}
-        <div className="p-3 border-t border-white/10 flex items-center gap-2.5">
-          <Avatar className="h-8 w-8">
-            <AvatarFallback className="bg-white/15 text-white text-xs font-semibold">
+        <div className="rounded-lg bg-sidebar-panel text-sidebar-panel-foreground shadow-md p-2.5 flex items-center gap-2.5">
+          <Avatar className="h-8 w-8 border border-border">
+            <AvatarFallback className="bg-brand-soft text-brand-deep text-xs font-semibold">
               {initials}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 leading-tight min-w-0">
-            <div className="text-sm font-semibold truncate">{displayName || "Usuario"}</div>
-            <div className="text-[11px] text-white/60 capitalize font-medium">{roles.join(", ")}</div>
+            <div className="text-sm font-semibold truncate text-foreground">{displayName || "Usuario"}</div>
+            <div className="text-[11px] text-muted-foreground capitalize font-medium">{roles.join(", ")}</div>
           </div>
           <Button
             size="icon"
             variant="ghost"
-            className="text-white/80 hover:bg-white/10 hover:text-white shrink-0"
+            className="text-muted-foreground hover:bg-muted hover:text-foreground shrink-0"
             onClick={handleLogout}
             title="Cerrar sesión"
+            aria-label="Cerrar sesión"
           >
             <LogOut className="h-4 w-4" />
           </Button>
@@ -154,13 +159,13 @@ function AppLayout() {
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* Top Header */}
-        <header className="h-16 border-b bg-white flex items-center px-4 md:px-6 gap-3 shrink-0">
+        <header className="h-16 border-b border-t-4 border-t-brand bg-card flex items-center px-4 md:px-6 gap-3 shrink-0">
           <div className="md:hidden"><Brand compact /></div>
           
           <div className="hidden md:flex items-center gap-2 flex-1 max-w-md">
             <div className="relative w-full">
               <Search className="h-4 w-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Buscar participantes, sesiones, ítems…" className="pl-8 bg-muted/50 border-0 focus-visible:ring-primary/40 focus-visible:bg-white transition" />
+              <Input placeholder="Buscar participantes, sesiones, ítems…" className="pl-8 bg-muted/60 border-0 focus-visible:ring-primary/40 focus-visible:bg-card transition" />
             </div>
           </div>
           
@@ -174,15 +179,15 @@ function AppLayout() {
         </header>
 
         {/* Dynamic Section Header */}
-        <div className="px-4 md:px-6 py-4 border-b bg-white flex flex-wrap items-center gap-3 shrink-0">
+        <div className="px-4 md:px-6 py-4 border-b bg-card flex flex-wrap items-center gap-3 shrink-0">
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl text-primary font-bold tracking-tight">{headerInfo.t}</h1>
+            <h1 className="text-xl text-brand-deep dark:text-primary font-bold tracking-tight">{headerInfo.t}</h1>
             <p className="text-xs text-muted-foreground mt-0.5">{headerInfo.s}</p>
           </div>
         </div>
 
         {/* Route Outlet */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-[#fafafa]">
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-background">
           {/* `key`: al cambiar de cuenta de staff se remonta el área y se descarta el estado local (borradores, enlaces). */}
           <Outlet key={sessionId} />
         </main>

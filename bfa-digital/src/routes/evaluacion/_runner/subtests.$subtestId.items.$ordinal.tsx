@@ -731,7 +731,7 @@ function SubtestItemRunnerRoute() {
                       "flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md font-mono text-sm tabular-nums transition-colors cursor-pointer",
                       "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring",
                       isCurrent
-                        ? "border-2 border-primary bg-primary/10 text-primary font-semibold"
+                        ? "border-2 border-primary bg-primary/10 text-brand-deep dark:text-primary font-semibold"
                         : isRejected
                           ? "border-2 border-status-danger-solid bg-status-danger-bg text-status-danger-fg font-semibold"
                           : answered

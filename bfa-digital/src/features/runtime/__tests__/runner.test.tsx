@@ -231,7 +231,7 @@ describe("Runner del participante (R-04)", () => {
 
     const { router, history, container } = await renderRunnerAt("/evaluacion/42-mi-token-secreto");
 
-    expect(await screen.findByText("Bienvenido/a a la evaluación BFA Digital")).toBeInTheDocument();
+    expect(await screen.findByText("Bienvenido/a a la evaluación UAM SIAT")).toBeInTheDocument();
     expect(seenValidate).toEqual({ assignmentId: 42, token: "mi-token-secreto" });
     expect(router.state.location.pathname).toBe("/evaluacion/sesion");
     expect(history.location.pathname).toBe("/evaluacion/sesion");
@@ -269,7 +269,7 @@ describe("Runner del participante (R-04)", () => {
     fireEvent.change(input, { target: { value: "42-clave-manual" } });
     fireEvent.click(screen.getByRole("button", { name: /continuar/i }));
 
-    expect(await screen.findByText("Bienvenido/a a la evaluación BFA Digital")).toBeInTheDocument();
+    expect(await screen.findByText("Bienvenido/a a la evaluación UAM SIAT")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/evaluacion/sesion");
     expect(qc.getQueryData(["runtime", "evaluation", 99])).toBeUndefined();
   });

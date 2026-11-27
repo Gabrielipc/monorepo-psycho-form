@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { createFileRoute, redirect, useNavigate, useRouter } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Brand } from "../app/components/brand";
+import { Brand, APP_NAME } from "../app/components/brand";
 import { Button } from "../app/components/ui/button";
 import { Input } from "../app/components/ui/input";
 import { Label } from "../app/components/ui/label";
@@ -84,32 +84,37 @@ function LoginRoute() {
   };
 
   return (
-    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-muted/30">
-      <div className="hidden lg:flex flex-col justify-between bg-primary text-primary-foreground p-10 relative overflow-hidden">
-        <Brand light />
+    <div className="min-h-screen w-full grid lg:grid-cols-2 bg-background">
+      <div className="hidden lg:flex flex-col justify-between bg-sidebar text-sidebar-foreground p-10 relative overflow-hidden">
+        <div className="relative z-10">
+          <Brand light />
+        </div>
         <div className="relative z-10 max-w-md">
           <h2 className="text-3xl font-semibold leading-tight">
-            Plataforma de digitalización de la Batería de Funciones Atencionales
+            Sistema Integrado de Aplicación de Tests
           </h2>
-          <p className="mt-4 text-white/80">
-            Aplicación supervisada de los subtests Figuras idénticas, Desplazamiento y Espacial. Resguardo de claves, ítems e imágenes bajo estándares de confidencialidad académica.
+          <div className="mt-4 h-1 w-24 rounded-full bg-white/70" aria-hidden="true" />
+          <p className="mt-4 text-white">
+            Diseño de instrumentos, aplicación supervisada de pruebas psicométricas, calificación y reportes en un solo lugar. Resguardo de claves, ítems e imágenes bajo estándares de confidencialidad académica.
           </p>
-          <div className="mt-8 flex items-center gap-2 text-sm text-white/70">
+          <div className="mt-8 flex items-center gap-2 text-sm text-white">
             <ShieldCheck className="h-4 w-4" /> Acceso restringido a personal autorizado UAM.
           </div>
         </div>
-        <div className="text-xs text-white/50">© Universidad Americana · BFA Digital</div>
-        <div className="absolute -right-32 -bottom-32 h-96 w-96 rounded-full bg-white/5" />
-        <div className="absolute -right-10 top-20 h-40 w-40 rounded-full bg-destructive/30" />
+        <div className="relative z-10 text-xs text-white">© Universidad Americana · {APP_NAME}</div>
+        {/* Formas decorativas en el teal de la marca */}
+        <div className="absolute -right-32 -bottom-32 h-96 w-96 rounded-full bg-brand/60" aria-hidden="true" />
+        <div className="absolute -right-10 top-20 h-40 w-40 rounded-full border-[14px] border-white/10" aria-hidden="true" />
+        <div className="absolute -left-24 -top-24 h-64 w-64 rounded-full bg-brand-deep/40" aria-hidden="true" />
       </div>
 
       <div className="flex items-center justify-center p-6">
-        <Card className="w-full max-w-md border-0 shadow-lg bg-white">
+        <Card className="w-full max-w-md border-0 border-t-4 border-t-brand shadow-lg bg-card">
           <CardContent className="p-8">
             <div className="lg:hidden mb-6">
               <Brand />
             </div>
-            <h1 className="text-2xl font-semibold text-primary">Iniciar sesión</h1>
+            <h1 className="text-2xl font-semibold text-brand-deep dark:text-primary">Iniciar sesión</h1>
             <p className="text-sm text-muted-foreground mt-1">
               Ingrese sus credenciales institucionales.
             </p>
