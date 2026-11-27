@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -235,10 +236,34 @@ public class SessionManagementService {
             }
             entityManager.flush();
         }
-        return commands.stream()
+        List<SesionSubtest> result = new ArrayList<>(commands.stream()
                 .map(command -> saveSubtest(session, command))
-                .sorted(Comparator.comparing(SesionSubtest::getNumeroOrden))
+                .toList());
+        if (!deleteOmitted && !commands.isEmpty()) {
+            result.addAll(relocateKeptSubtests(sessionId, commands));
+        }
+        result.sort(Comparator.comparing(SesionSubtest::getNumeroOrden));
+        return result;
+    }
+
+    /**
+     * En el modo upsert los subtests omitidos se conservan, pero no pueden competir por las posiciones que el
+     * cliente acaba de asignar: se reubican a continuacion de la mayor posicion enviada, manteniendo su orden
+     * relativo actual. La UNIQUE (sesion_aplicacion_id, numero_orden) es DEFERRABLE, asi que basta con dejar el
+     * estado final consistente antes del commit (el flush lo fuerza dentro de la misma transaccion).
+     */
+    private List<SesionSubtest> relocateKeptSubtests(long sessionId, List<SessionSubtestCommand> commands) {
+        Set<Long> sentSubtestIds = commands.stream().map(SessionSubtestCommand::subtestId)
+                .collect(Collectors.toSet());
+        int nextOrder = commands.stream().mapToInt(SessionSubtestCommand::order).max().orElse(0) + 1;
+        List<SesionSubtest> kept = sesionSubtests.findBySesionAplicacionIdOrderByNumeroOrdenAsc(sessionId).stream()
+                .filter(row -> !sentSubtestIds.contains(row.getSubtest().getId()))
                 .toList();
+        for (SesionSubtest row : kept) {
+            row.setNumeroOrden(nextOrder++);
+        }
+        entityManager.flush();
+        return kept;
     }
 
     private void validateSubtestCommands(List<SessionSubtestCommand> commands) {

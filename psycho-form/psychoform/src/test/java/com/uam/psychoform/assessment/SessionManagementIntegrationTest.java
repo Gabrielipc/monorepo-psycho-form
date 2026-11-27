@@ -151,13 +151,18 @@ class SessionManagementIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(JSON.writeValueAsString(partial)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.length()").value(1))
-                .andExpect(jsonPath("$.data[0].tiempoLimiteSegundos").value(450));
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].subtestId").value(scenario.subtestIds().get(1)))
+                .andExpect(jsonPath("$.data[0].numeroOrden").value(2))
+                .andExpect(jsonPath("$.data[0].tiempoLimiteSegundos").value(450))
+                .andExpect(jsonPath("$.data[1].subtestId").value(scenario.subtestIds().get(0)))
+                .andExpect(jsonPath("$.data[1].numeroOrden").value(3));
 
         Integer count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
                 Integer.class, scenario.sessionId());
         assertThat(count).isEqualTo(2);
-        assertThat(subtestOrderInSession(scenario.subtestIds().get(0))).isEqualTo(1);
+        assertThat(subtestOrderInSession(scenario.subtestIds().get(0))).isEqualTo(3);
+        assertThat(subtestOrderInSession(scenario.subtestIds().get(1))).isEqualTo(2);
 
         mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
                 .header("Authorization", bearer("SESION_CREAR"))
@@ -168,6 +173,112 @@ class SessionManagementIntegrationTest {
         count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
                 Integer.class, scenario.sessionId());
         assertThat(count).isEqualTo(2);
+        assertThat(subtestOrderInSession(scenario.subtestIds().get(0))).isEqualTo(3);
+        assertThat(subtestOrderInSession(scenario.subtestIds().get(1))).isEqualTo(2);
+    }
+
+    @Test
+    void wizardResumeUncheckingFirstSubtestRelocatesKeptOneAfterSentOnes() throws Exception {
+        scenario = seed("PROGRAMADA");
+        long a = scenario.subtestIds().get(0);
+        long b = scenario.subtestIds().get(1);
+
+        putSubtests(List.of(
+                new SessionSubtestRequest(a, 1, 300, false, false),
+                new SessionSubtestRequest(b, 2, 600, false, false)))
+                .andExpect(status().isOk());
+
+        // El wizard reanudado desmarca A y reenvia solo B con order 1.
+        putSubtests(List.of(new SessionSubtestRequest(b, 1, 600, false, false)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].subtestId").value(b))
+                .andExpect(jsonPath("$.data[0].numeroOrden").value(1))
+                .andExpect(jsonPath("$.data[1].subtestId").value(a))
+                .andExpect(jsonPath("$.data[1].numeroOrden").value(2));
+
+        assertThat(subtestOrderInSession(b)).isEqualTo(1);
+        assertThat(subtestOrderInSession(a)).isEqualTo(2);
+    }
+
+    @Test
+    void upsertKeepsKeptSubtestsAfterSentOnesPreservingTheirRelativeOrder() throws Exception {
+        scenario = seed("PROGRAMADA");
+        long a = scenario.subtestIds().get(0);
+        long b = scenario.subtestIds().get(1);
+        long c = insertThirdSubtest();
+
+        putSubtests(List.of(
+                new SessionSubtestRequest(a, 1, 300, false, false),
+                new SessionSubtestRequest(b, 2, 600, false, false),
+                new SessionSubtestRequest(c, 3, 120, false, false)))
+                .andExpect(status().isOk());
+
+        // Se envian C y B (C primero); A se conserva y queda al final.
+        putSubtests(List.of(
+                new SessionSubtestRequest(c, 1, 120, false, false),
+                new SessionSubtestRequest(b, 2, 600, false, false)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(3))
+                .andExpect(jsonPath("$.data[0].subtestId").value(c))
+                .andExpect(jsonPath("$.data[0].numeroOrden").value(1))
+                .andExpect(jsonPath("$.data[1].subtestId").value(b))
+                .andExpect(jsonPath("$.data[1].numeroOrden").value(2))
+                .andExpect(jsonPath("$.data[2].subtestId").value(a))
+                .andExpect(jsonPath("$.data[2].numeroOrden").value(3));
+
+        assertThat(subtestOrderInSession(c)).isEqualTo(1);
+        assertThat(subtestOrderInSession(b)).isEqualTo(2);
+        assertThat(subtestOrderInSession(a)).isEqualTo(3);
+    }
+
+    @Test
+    void upsertWithSeveralKeptSubtestsKeepsTheirRelativeOrder() throws Exception {
+        scenario = seed("PROGRAMADA");
+        long a = scenario.subtestIds().get(0);
+        long b = scenario.subtestIds().get(1);
+        long c = insertThirdSubtest();
+
+        putSubtests(List.of(
+                new SessionSubtestRequest(a, 1, 300, false, false),
+                new SessionSubtestRequest(b, 2, 600, false, false),
+                new SessionSubtestRequest(c, 3, 120, false, false)))
+                .andExpect(status().isOk());
+
+        putSubtests(List.of(new SessionSubtestRequest(c, 1, 120, false, false)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(3))
+                .andExpect(jsonPath("$.data[0].subtestId").value(c))
+                .andExpect(jsonPath("$.data[1].subtestId").value(a))
+                .andExpect(jsonPath("$.data[1].numeroOrden").value(2))
+                .andExpect(jsonPath("$.data[2].subtestId").value(b))
+                .andExpect(jsonPath("$.data[2].numeroOrden").value(3));
+    }
+
+    @Test
+    void replaceModeWithSingleSubtestLeavesOnlyThatOneAtItsOrder() throws Exception {
+        scenario = seed("PROGRAMADA");
+        long a = scenario.subtestIds().get(0);
+        long b = scenario.subtestIds().get(1);
+
+        putSubtests(List.of(
+                new SessionSubtestRequest(a, 1, 300, false, false),
+                new SessionSubtestRequest(b, 2, 600, false, false)))
+                .andExpect(status().isOk());
+
+        mvc.perform(put("/sesiones/{id}/subtests?mode=replace", scenario.sessionId())
+                .header("Authorization", bearer("SESION_CREAR"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(List.of(new SessionSubtestRequest(b, 1, 600, false, false)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].subtestId").value(b))
+                .andExpect(jsonPath("$.data[0].numeroOrden").value(1));
+
+        Integer count = jdbc.queryForObject("select count(*) from sesion_subtest where sesion_aplicacion_id = ?",
+                Integer.class, scenario.sessionId());
+        assertThat(count).isEqualTo(1);
+        assertThat(subtestOrderInSession(b)).isEqualTo(1);
     }
 
     @Test
@@ -436,6 +547,26 @@ class SessionManagementIntegrationTest {
 
     private long id(String sql, Object... args) {
         return jdbc.queryForObject(sql, Long.class, args);
+    }
+
+    /** La version del seed ya esta publicada (contenido inmutable), asi que el trigger se desactiva solo aqui. */
+    private long insertThirdSubtest() {
+        return new TransactionTemplate(txManager).execute(status -> {
+            jdbc.execute("set local session_replication_role = replica");
+            return id(
+                    "insert into subtest (version_test_id, codigo_subtest, nombre_subtest, numero_orden, "
+                            + "tiempo_limite_segundos) values (?, 'SUB-3', 'Subtest Tres', 3, 120) "
+                            + "returning subtest_id",
+                    scenario.versionId());
+        });
+    }
+
+    private org.springframework.test.web.servlet.ResultActions putSubtests(List<SessionSubtestRequest> body)
+            throws Exception {
+        return mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+                .header("Authorization", bearer("SESION_CREAR"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(body)));
     }
 
     private Integer subtestOrderInSession(long subtestId) {
