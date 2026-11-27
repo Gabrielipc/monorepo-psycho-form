@@ -14,6 +14,17 @@ public interface SesionAplicacionRepository extends JpaRepository<SesionAplicaci
     @Query("select s from SesionAplicacion s where s.id = :id")
     Optional<SesionAplicacion> findByIdForUpdate(Long id);
 
+    @Query("""
+            select s, ss, st from SesionAplicacion s
+            join fetch s.versionTest v
+            join fetch v.test
+            left join SesionSubtest ss on ss.sesionAplicacion = s
+            left join ss.subtest st
+            where s.id = :id
+            order by ss.numeroOrden asc
+            """)
+    List<Object[]> findDetailRowsById(Long id);
+
 
     @Query("""
             select s from SesionAplicacion s

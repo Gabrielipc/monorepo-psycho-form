@@ -38,7 +38,7 @@ public class SessionController {
     @GetMapping("/{id}")
     @PreAuthorize(SecurityPermissions.SESION_LEER)
     public ApiResponse<?> detail(@PathVariable Long id) {
-        return ApiResponse.ok(EntityView.of(management.getSession(id)));
+        return ApiResponse.ok(management.getSessionDetail(id));
     }
 
     @PostMapping

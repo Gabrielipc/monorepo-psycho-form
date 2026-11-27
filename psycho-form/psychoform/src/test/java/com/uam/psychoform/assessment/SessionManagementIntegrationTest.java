@@ -1,6 +1,7 @@
 package com.uam.psychoform.assessment;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -244,6 +245,91 @@ class SessionManagementIntegrationTest {
                 .content("[]"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error.code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void getSessionDetailIncludesTestVersionAndOrderedSubtestsWithFallbackTimeLimit() throws Exception {
+        scenario = seed("PROGRAMADA");
+
+        List<SessionSubtestRequest> payload = List.of(
+                new SessionSubtestRequest(scenario.subtestIds().get(0), 2, 500, true, false),
+                new SessionSubtestRequest(scenario.subtestIds().get(1), 1, null, false, true));
+
+        mvc.perform(put("/sesiones/{id}/subtests", scenario.sessionId())
+                .header("Authorization", bearer("SESION_CREAR"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(JSON.writeValueAsString(payload)))
+                .andExpect(status().isOk());
+
+        String expectedTestName = jdbc.queryForObject("select nombre_test from test where test_id = ?",
+                String.class, scenario.testId());
+
+        mvc.perform(get("/sesiones/{id}", scenario.sessionId())
+                .header("Authorization", bearer("SESION_APLICAR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(scenario.sessionId()))
+                .andExpect(jsonPath("$.data.codigoSesion").isNotEmpty())
+                .andExpect(jsonPath("$.data.nombreSesion").isNotEmpty())
+                .andExpect(jsonPath("$.data.estado").value("PROGRAMADA"))
+                .andExpect(jsonPath("$.data.inicioProgramado").isNotEmpty())
+                .andExpect(jsonPath("$.data.versionTestId").value(scenario.versionId()))
+                .andExpect(jsonPath("$.data.testId").value(scenario.testId()))
+                .andExpect(jsonPath("$.data.testName").value(expectedTestName))
+                .andExpect(jsonPath("$.data.versionNumber").value("1.0"))
+                .andExpect(jsonPath("$.data.subtests.length()").value(2))
+                .andExpect(jsonPath("$.data.subtests[0].subtestId").value(scenario.subtestIds().get(1)))
+                .andExpect(jsonPath("$.data.subtests[0].code").value("SUB-2"))
+                .andExpect(jsonPath("$.data.subtests[0].name").value("Subtest Dos"))
+                .andExpect(jsonPath("$.data.subtests[0].order").value(1))
+                .andExpect(jsonPath("$.data.subtests[0].timeLimitSeconds").value(240))
+                .andExpect(jsonPath("$.data.subtests[0].randomizeItems").value(false))
+                .andExpect(jsonPath("$.data.subtests[0].randomizeOptions").value(true))
+                .andExpect(jsonPath("$.data.subtests[1].subtestId").value(scenario.subtestIds().get(0)))
+                .andExpect(jsonPath("$.data.subtests[1].code").value("SUB-1"))
+                .andExpect(jsonPath("$.data.subtests[1].name").value("Subtest Uno"))
+                .andExpect(jsonPath("$.data.subtests[1].order").value(2))
+                .andExpect(jsonPath("$.data.subtests[1].timeLimitSeconds").value(500))
+                .andExpect(jsonPath("$.data.subtests[1].randomizeItems").value(true))
+                .andExpect(jsonPath("$.data.subtests[1].randomizeOptions").value(false));
+    }
+
+    @Test
+    void getSessionDetailWithoutSubtestsReturnsEmptyList() throws Exception {
+        scenario = seed("PROGRAMADA");
+
+        mvc.perform(get("/sesiones/{id}", scenario.sessionId())
+                .header("Authorization", bearer("SESION_APLICAR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.testId").value(scenario.testId()))
+                .andExpect(jsonPath("$.data.versionNumber").value("1.0"))
+                .andExpect(jsonPath("$.data.subtests").isArray())
+                .andExpect(jsonPath("$.data.subtests.length()").value(0));
+    }
+
+    @Test
+    void listSessionsRemainsUnchangedWithoutDetailFields() throws Exception {
+        scenario = seed("PROGRAMADA");
+
+        mvc.perform(get("/sesiones")
+                .header("Authorization", bearer("SESION_APLICAR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[?(@.id == " + scenario.sessionId() + ")].versionTestId")
+                        .value(org.hamcrest.Matchers.contains((int) scenario.versionId())))
+                .andExpect(jsonPath("$.data[?(@.id == " + scenario.sessionId() + ")].testId").isEmpty())
+                .andExpect(jsonPath("$.data[?(@.id == " + scenario.sessionId() + ")].testName").isEmpty())
+                .andExpect(jsonPath("$.data[?(@.id == " + scenario.sessionId() + ")].versionNumber").isEmpty())
+                .andExpect(jsonPath("$.data[?(@.id == " + scenario.sessionId() + ")].subtests").isEmpty());
+    }
+
+    @Test
+    void getSessionDetailNotFoundReturns404() throws Exception {
+        mvc.perform(get("/sesiones/{id}", 999_999_999L)
+                .header("Authorization", bearer("SESION_APLICAR")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
 
     private Scenario seed(String sessionState) {

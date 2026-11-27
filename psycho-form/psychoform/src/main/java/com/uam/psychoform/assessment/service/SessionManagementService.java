@@ -1,7 +1,9 @@
 package com.uam.psychoform.assessment.service;
 
+import com.uam.psychoform.assessment.dto.SessionSubtestDetailDto;
 import com.uam.psychoform.assessment.model.*;
 import com.uam.psychoform.assessment.repository.*;
+import com.uam.psychoform.dto.EntityView;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
 import com.uam.psychoform.instrument.model.Subtest;
 import com.uam.psychoform.instrument.model.VersionTest;
@@ -16,7 +18,9 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -55,6 +59,41 @@ public class SessionManagementService {
     public SesionAplicacion getSession(long sessionId) {
         return sesiones.findById(sessionId)
                 .orElseThrow(() -> new EntityNotFoundException("Sesion no encontrada: " + sessionId));
+    }
+
+    @PreAuthorize(SecurityPermissions.SESION_LEER)
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getSessionDetail(long sessionId) {
+        List<Object[]> rows = sesiones.findDetailRowsById(sessionId);
+        if (rows.isEmpty()) {
+            throw new EntityNotFoundException("Sesion no encontrada: " + sessionId);
+        }
+        SesionAplicacion session = (SesionAplicacion) rows.get(0)[0];
+        List<SessionSubtestDetailDto> subtests = rows.stream()
+                .filter(row -> row[1] != null)
+                .map(row -> toSubtestDetailDto((SesionSubtest) row[1], (Subtest) row[2]))
+                .toList();
+        Map<String, Object> view = new LinkedHashMap<>((Map<String, Object>) EntityView.of(session));
+        VersionTest version = session.getVersionTest();
+        view.put("testId", version.getTest().getId());
+        view.put("testName", version.getTest().getNombreTest());
+        view.put("versionNumber", version.getNumeroVersion());
+        view.put("subtests", subtests);
+        return view;
+    }
+
+    private SessionSubtestDetailDto toSubtestDetailDto(SesionSubtest ss, Subtest subtest) {
+        Integer timeLimitSeconds = ss.getTiempoLimiteSegundos() != null
+                ? ss.getTiempoLimiteSegundos()
+                : subtest.getTiempoLimiteSegundos();
+        return new SessionSubtestDetailDto(
+                subtest.getId(),
+                subtest.getCodigoSubtest(),
+                subtest.getNombreSubtest(),
+                ss.getNumeroOrden(),
+                timeLimitSeconds,
+                ss.getPermiteAleatorizarItems(),
+                ss.getPermiteAleatorizarOpciones());
     }
 
     @Transactional
