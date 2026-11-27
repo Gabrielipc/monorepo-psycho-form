@@ -147,8 +147,15 @@ export async function validateAccess(input: string | ValidateAccessRequest): Pro
   return parseOrThrow(ParticipantAccessSchema, unwrap(res), "POST /acceso-participante/validar");
 }
 
-export async function getEvaluation(): Promise<Evaluation> {
-  const res = await participantClient.get<ApiEnvelope<unknown>>("/evaluacion-participante/yo");
+export interface GetEvaluationOptions {
+  /** Ver `AxiosRequestConfig.isStillRelevant`: un 401 de una petición ya obsoleta no cierra la sesión. */
+  isStillRelevant?: () => boolean;
+}
+
+export async function getEvaluation(options: GetEvaluationOptions = {}): Promise<Evaluation> {
+  const res = await participantClient.get<ApiEnvelope<unknown>>("/evaluacion-participante/yo", {
+    isStillRelevant: options.isStillRelevant,
+  });
   return parseOrThrow(EvaluationSchema, unwrap(res), "GET /evaluacion-participante/yo");
 }
 

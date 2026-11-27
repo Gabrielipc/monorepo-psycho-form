@@ -102,7 +102,7 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
         description: "Evaluación integral de aptitudes cognitivas",
         createdById: "44444444-4444-4444-4444-444444444444",
         status: "ACTIVO",
-        createdAt: "2026-06-26T10:15:30",
+        createdAt: "2026-06-26T10:15:30.000Z",
       },
     ]);
 
@@ -117,8 +117,14 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
       randomizeSubtests: false,
       randomizeItems: true,
       approvedById: null,
+      approvedAt: null,
+      publishedAt: null,
+      createdAt: "2026-06-26T10:20:00.000Z",
     });
     expect(versions[1]?.status).toBe("PUBLICADO");
+    expect(versions[1]?.approvedAt).toBe("2026-06-27T09:00:00.000Z");
+    expect(versions[1]?.publishedAt).toBe("2026-06-27T09:30:00.000Z");
+    expect(versions[1]?.createdAt).toBe("2026-06-26T11:00:00.000Z");
 
     const subtests = await listSubtests(10);
     expect(subtests[0]).toMatchObject({
@@ -189,6 +195,7 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
       strategyType: "CLAVE_SIMPLE",
       active: true,
       allowsBaremo: true,
+      createdAt: "2026-06-01T08:00:00.000Z",
     });
 
     const rules = await listScoringRules(20);
@@ -202,6 +209,8 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
       priority: 1,
       status: "BORRADOR",
       parametersJson: "{}",
+      createdAt: "2026-06-26T10:30:00.000Z",
+      approvedAt: null,
     });
 
     const key = await getAnswerKey(30);
@@ -212,6 +221,7 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
       correctOptionId: 40,
       score: 1,
       requiresManualReview: false,
+      createdAt: "2026-06-26T10:35:00.000Z",
     });
 
     const baremos = await listBaremos(10);
@@ -226,6 +236,8 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
       validFrom: "2026-01-01",
       validTo: "2026-12-31",
       status: "BORRADOR",
+      createdAt: "2026-06-26T10:40:00.000Z",
+      approvedAt: null,
     });
 
     const ranges = await listBaremoRanges(90);
@@ -281,6 +293,18 @@ describe("instruments endpoints: parseo de listas principales y entidades", () =
     });
 
     const err = await listVersions(1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe("CONTRACT_MISMATCH");
+  });
+
+  it("lanza CONTRACT_MISMATCH si llega una fecha inválida en creadoEn", async () => {
+    server.use(
+      http.get(`${API}/tests`, () =>
+        HttpResponse.json(ok([{ ...testsFixture[0], creadoEn: "fecha-invalida" }])),
+      ),
+    );
+
+    const err = await listTests().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).code).toBe("CONTRACT_MISMATCH");
   });

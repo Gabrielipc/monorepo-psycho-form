@@ -10,11 +10,13 @@ import {
   Loader2,
   Lock,
   Play,
+  RefreshCw,
   ShieldCheck,
   WifiOff,
   XCircle,
 } from "lucide-react";
 
+import type { Evaluation } from "../../../api/schemas/runtime";
 import { Alert, AlertDescription, AlertTitle } from "../../../app/components/ui/alert";
 import { Badge } from "../../../app/components/ui/badge";
 import { Brand } from "../../../app/components/brand";
@@ -26,13 +28,68 @@ import { StatusBadge } from "../../../app/components/ui/status-badge";
 import { cn } from "../../../app/components/ui/utils";
 import { useRunner } from "../../../features/runtime/RunnerContext";
 import { isAnswered } from "../../../features/runtime/answer-value";
-import { useRejectedAnswers, useSyncStatus } from "../../../features/runtime/draft";
+import {
+  useRejectedAnswers,
+  useSyncStatus,
+  useUnconfirmedAnswers,
+  type UnconfirmedAnswerEntry,
+} from "../../../features/runtime/draft";
 import { isSubtestOpenable } from "../../../features/runtime/machine";
 import { useParticipantAuth } from "../../../store/participantAuth";
 
 export const Route = createFileRoute("/evaluacion/_runner/sesion")({
   component: EvaluacionSesionRoute,
 });
+
+function formatUnconfirmedItemLabel(
+  evaluation: Evaluation,
+  entry: UnconfirmedAnswerEntry,
+): string {
+  const sub = evaluation.subtests.find((s) => s.id === entry.subtestId);
+  if (sub) {
+    const idx = sub.items.findIndex((it) => it.id === entry.itemId);
+    if (idx >= 0) {
+      return `${sub.name} · Ítem ${idx + 1}`;
+    }
+    return `${sub.name} · Ítem #${entry.itemId}`;
+  }
+  return `Subtest #${entry.subtestId} · Ítem #${entry.itemId}`;
+}
+
+function UnconfirmedAnswersAlert({
+  entries,
+  evaluation,
+}: {
+  entries: readonly UnconfirmedAnswerEntry[];
+  evaluation: Evaluation;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <Alert
+      role="alert"
+      className="mt-5 border-status-warning-border bg-status-warning-bg text-status-warning-fg text-left"
+    >
+      <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+      <AlertTitle>
+        {entries.length}{" "}
+        {entries.length === 1
+          ? "respuesta quedó sin confirmar al vencer el tiempo"
+          : "respuestas quedaron sin confirmar al vencer el tiempo"}
+      </AlertTitle>
+      <AlertDescription className="text-status-warning-fg text-xs space-y-1">
+        <p>
+          El límite de tiempo cerró el subtest sin conexión confirmada; informe a su aplicador para
+          revisión si corresponde:
+        </p>
+        <ul className="list-disc pl-4 space-y-0.5 tabular-nums">
+          {entries.map((entry) => (
+            <li key={entry.itemId}>{formatUnconfirmedItemLabel(evaluation, entry)}</li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 function formatTimeLimit(seconds: number | null): string {
   if (seconds === null) return "Sin límite";
@@ -48,17 +105,22 @@ function EvaluacionSesionRoute() {
     evaluation,
     isStartingAttempt,
     isFinishingAttempt,
+    isRetryingSync,
     actionError,
     clearActionError,
+    completedUnconfirmedAnswers,
+    completedRejectedAnswers,
     startAttemptAction,
     openSubtestAction,
     backToListAction,
     finishAttemptAction,
+    retrySyncAction,
     getItemValue,
   } = useRunner();
 
   const syncStatus = useSyncStatus();
   const rejectedAnswers = useRejectedAnswers();
+  const unconfirmedAnswers = useUnconfirmedAnswers();
   const [confirmFinishOpen, setConfirmFinishOpen] = useState(false);
 
   // Si llegó aquí por botón Atrás desde instrucciones, regresa limpiamente a listaSubtests.
@@ -230,6 +292,35 @@ function EvaluacionSesionRoute() {
               esta pestaña de forma segura.
             </div>
 
+            <UnconfirmedAnswersAlert
+              entries={completedUnconfirmedAnswers}
+              evaluation={evaluation}
+            />
+
+            {completedRejectedAnswers.length > 0 && (
+              <Alert
+                role="alert"
+                className="mt-4 border-status-danger-border bg-status-danger-bg text-status-danger-fg text-left"
+              >
+                <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+                <AlertTitle>
+                  {completedRejectedAnswers.length}{" "}
+                  {completedRejectedAnswers.length === 1
+                    ? "respuesta no pudo guardarse en el servidor"
+                    : "respuestas no pudieron guardarse en el servidor"}
+                </AlertTitle>
+                <AlertDescription className="text-status-danger-fg text-xs space-y-1">
+                  <ul className="list-disc pl-4 space-y-0.5">
+                    {completedRejectedAnswers.map((entry) => (
+                      <li key={entry.itemId}>
+                        Ítem #{entry.itemId}: {entry.code}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+
             <Button
               type="button"
               variant="outline"
@@ -306,13 +397,31 @@ function EvaluacionSesionRoute() {
               <Alert className="mt-5 border-status-warning-border bg-status-warning-bg text-status-warning-fg">
                 <WifiOff className="size-4 shrink-0" aria-hidden="true" />
                 <AlertTitle>Sincronización pendiente</AlertTitle>
-                <AlertDescription className="text-status-warning-fg text-xs leading-relaxed tabular-nums">
-                  Tiene {syncStatus.pending}{" "}
-                  {syncStatus.pending === 1 ? "respuesta pendiente" : "respuestas pendientes"} de envío. Al
-                  confirmar la entrega se intentará sincronizar antes de cerrar.
+                <AlertDescription className="text-status-warning-fg text-xs leading-relaxed tabular-nums space-y-2">
+                  <p>
+                    Tiene {syncStatus.pending}{" "}
+                    {syncStatus.pending === 1 ? "respuesta pendiente" : "respuestas pendientes"} de envío.
+                    Debe confirmarse la sincronización antes de entregar la evaluación.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isRetryingSync || isFinishingAttempt}
+                    className="gap-1.5 border-status-warning-border bg-card text-foreground hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring"
+                    onClick={() => void retrySyncAction()}
+                  >
+                    <RefreshCw
+                      className={cn("size-3.5", isRetryingSync && "animate-spin")}
+                      aria-hidden="true"
+                    />
+                    Reintentar sincronización
+                  </Button>
                 </AlertDescription>
               </Alert>
             )}
+
+            <UnconfirmedAnswersAlert entries={unconfirmedAnswers} evaluation={evaluation} />
 
             {rejectedAnswers.length > 0 && (
               <Alert
@@ -378,6 +487,13 @@ function EvaluacionSesionRoute() {
                     Esta acción dará por concluida su evaluación de forma definitiva y no podrá volver a
                     modificar sus respuestas.
                   </p>
+                  {syncStatus.pending > 0 && (
+                    <p className="text-status-warning-fg font-medium tabular-nums">
+                      Hay {syncStatus.pending}{" "}
+                      {syncStatus.pending === 1 ? "respuesta pendiente" : "respuestas pendientes"} de envío;
+                      si falla la sincronización, la evaluación no se cerrará hasta confirmarlas.
+                    </p>
+                  )}
                   {rejectedAnswers.length > 0 && (
                     <p className="text-status-danger-fg font-medium">
                       Aviso: hay {rejectedAnswers.length}{" "}
@@ -424,7 +540,9 @@ function EvaluacionSesionRoute() {
 
           <Separator className="my-6" />
 
-          <div className="space-y-3">
+          <UnconfirmedAnswersAlert entries={unconfirmedAnswers} evaluation={evaluation} />
+
+          <div className="space-y-3 mt-4">
             {orderedSubtests.map((subtest, idx) => {
               const openable = isSubtestOpenable(evaluation, subtest.id);
               const isAnnulled = subtest.status === "ANULADO";

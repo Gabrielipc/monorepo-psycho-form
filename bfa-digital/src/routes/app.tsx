@@ -1,15 +1,12 @@
-import { ReactNode, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { createFileRoute, Outlet, Link, redirect, useNavigate, useLocation, useRouter } from "@tanstack/react-router";
 import { useStaffAuth } from "../store/staffAuth";
-import { normalizeRole } from "../store/authStore";
-import { ROUTE_PERMISSIONS } from "../store/routePermissions";
 import { ensureStaffUser } from "../store/ensureStaffUser";
 import { Brand } from "../app/components/brand";
 import {
-  LayoutDashboard, Users, ClipboardList, Activity, FileBarChart,
-  Settings2, ImageUp, ShieldCheck, UserCog, ListChecks, LogOut, Bell, Search, Database,
-  BookOpen, Layers, Calendar, ClipboardCheck
+  LogOut, Bell, Search,
 } from "lucide-react";
+import { NAV_GROUPS, visibleNavItems } from "../app/navigation";
 import { Input } from "../app/components/ui/input";
 import { Avatar, AvatarFallback } from "../app/components/ui/avatar";
 import { Badge } from "../app/components/ui/badge";
@@ -31,62 +28,15 @@ export const Route = createFileRoute("/app")({
   component: AppLayout,
 });
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: any;
-  /** Visible si el usuario tiene AL MENOS UNO. Vacío = cualquier usuario autenticado. */
-  permissions: readonly string[];
-}
-
-const NAV_GROUPS: { group: string; items: NavItem[] }[] = [
-  {
-    group: "General",
-    items: [
-      { to: "/app/dashboard", label: "Inicio", icon: LayoutDashboard, permissions: ROUTE_PERMISSIONS["/app/dashboard"] },
-    ],
-  },
-  {
-    group: "Catálogos",
-    items: [
-      { to: "/app/carreras", label: "Carreras", icon: BookOpen, permissions: ROUTE_PERMISSIONS["/app/carreras"] },
-      { to: "/app/grupos", label: "Grupos Académicos", icon: Layers, permissions: ROUTE_PERMISSIONS["/app/grupos"] },
-      { to: "/app/cohortes", label: "Cohortes", icon: Calendar, permissions: ROUTE_PERMISSIONS["/app/cohortes"] },
-      { to: "/app/sexos", label: "Sexos", icon: Users, permissions: ROUTE_PERMISSIONS["/app/sexos"] },
-    ],
-  },
-  {
-    group: "Aplicación",
-    items: [
-      { to: "/app/sesiones", label: "Monitor de sesiones", icon: Activity, permissions: ROUTE_PERMISSIONS["/app/sesiones"] },
-      { to: "/app/participantes", label: "Participantes", icon: Users, permissions: ROUTE_PERMISSIONS["/app/participantes"] },
-    ],
-  },
-  {
-    group: "Instrumentos",
-    items: [
-      { to: "/app/instrumentos", label: "Configuración de pruebas", icon: Settings2, permissions: ROUTE_PERMISSIONS["/app/instrumentos"] },
-    ],
-  },
-  {
-    group: "Resultados",
-    items: [
-      { to: "/app/calificaciones", label: "Calificar intentos", icon: ClipboardCheck, permissions: ROUTE_PERMISSIONS["/app/calificaciones"] },
-      { to: "/app/resultados", label: "Resultados individuales", icon: FileBarChart, permissions: ROUTE_PERMISSIONS["/app/resultados"] },
-      { to: "/app/dashboard-resultados", label: "Resultados agregados", icon: LayoutDashboard, permissions: ROUTE_PERMISSIONS["/app/dashboard-resultados"] },
-      { to: "/app/reportes", label: "Centro de reportes", icon: FileBarChart, permissions: ROUTE_PERMISSIONS["/app/reportes"] },
-    ],
-  },
-  {
-    group: "Administración",
-    items: [
-      { to: "/app/auditoria", label: "Auditoría", icon: ShieldCheck, permissions: ROUTE_PERMISSIONS["/app/auditoria"] },
-      { to: "/app/usuarios", label: "Usuarios", icon: UserCog, permissions: ROUTE_PERMISSIONS["/app/usuarios"] },
-      { to: "/app/roles", label: "Roles y permisos", icon: UserCog, permissions: ROUTE_PERMISSIONS["/app/roles"] },
-      { to: "/app/respaldos", label: "Respaldos", icon: Database, permissions: ROUTE_PERMISSIONS["/app/respaldos"] },
-    ],
-  },
-];
+/** Nombre de rol legible para el pie del menú lateral (ROLE_ADMINISTRADOR → admin). */
+const normalizeRole = (role: string): string => {
+  const clean = role.toUpperCase().replace(/^ROLE_/, "");
+  if (clean.includes("ADMINISTRADOR") || clean === "ADMIN") return "admin";
+  if (clean.includes("APLICADOR")) return "aplicador";
+  if (clean.includes("PSICOLOGO") || clean.includes("COORDINADOR")) return "psicologo";
+  if (clean.includes("CONSULTOR") || clean.includes("REPORTE")) return "consultor";
+  return clean.toLowerCase();
+};
 
 function AppLayout() {
   const navigate = useNavigate();
@@ -128,7 +78,6 @@ function AppLayout() {
     if (path.includes("/app/sesiones")) return { t: "Monitor de sesiones", s: "Estado en tiempo real de los participantes" };
     if (path.includes("/app/participantes")) return { t: "Participantes", s: "Registro y consulta de evaluados" };
     if (path.includes("/app/instrumentos")) return { t: "Configuración de pruebas", s: "Tests, versiones, subtests, ítems y claves" };
-    if (path.includes("/app/carga-imagenes")) return { t: "Carga de imágenes confidenciales", s: "Recursos visuales de los ítems" };
     if (path.includes("/app/revision-manual")) return { t: "Bandeja de revisión manual", s: "Respuestas abiertas pendientes de calificar" };
     if (path.includes("/app/calificaciones")) return { t: "Calificación de intentos", s: "Ejecución manual de scoring para intentos completados" };
     if (path.includes("/app/resultados")) return { t: "Resultados individuales", s: "Reporte psicométrico por participante" };
@@ -152,7 +101,7 @@ function AppLayout() {
         </div>
         <nav className="flex-1 overflow-y-auto p-3 space-y-5">
           {NAV_GROUPS.map((g) => {
-            const items = g.items.filter((i) => i.permissions.length === 0 || hasAnyPermission(i.permissions));
+            const items = visibleNavItems(g.items, hasAnyPermission);
             if (!items.length) return null;
             return (
               <div key={g.group}>

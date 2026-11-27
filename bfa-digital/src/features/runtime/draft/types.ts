@@ -51,6 +51,19 @@ export interface RejectedAnswer {
 export type RejectedAnswerEntry = RejectedAnswer & { itemId: number };
 
 /**
+ * Respuesta local que seguía pendiente en la cola cuando un subtest se cerró por tiempo
+ * agotado y la sincronización seguía fallando. Se preserva para mostrarla al participante.
+ */
+export interface UnconfirmedAnswer {
+  value: AnswerValue;
+  version: number;
+  subtestId: number;
+  recordedAt: number;
+}
+
+export type UnconfirmedAnswerEntry = UnconfirmedAnswer & { itemId: number };
+
+/**
  * La sincronización está retenida por una causa que no es de red: la cola se conserva intacta.
  * - `SESION_PAUSADA`: se sondea despacio y se reanuda con `resumeSync()` o al volver a abrirse la sesión.
  * - Cualquier otro código (`SESION_NO_ABIERTA`, `TOKEN_EXPIRADO`, `UNAUTHORIZED`…): no hay reintento

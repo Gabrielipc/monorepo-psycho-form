@@ -10,6 +10,7 @@ import type {
   QueueEntry,
   RejectedAnswer,
   SyncBlock,
+  UnconfirmedAnswer,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -52,12 +53,20 @@ const RejectedAnswerSchema = z.object({
   rejectedAt: z.number(),
 });
 
+const UnconfirmedAnswerSchema = z.object({
+  value: AnswerValueSchema,
+  version: z.number().int(),
+  subtestId: z.number().int(),
+  recordedAt: z.number(),
+});
+
 const PersistedDraftSchema = z.object({
   v: z.literal(STORAGE_VERSION),
   owner: z.object({ assignmentId: z.number().int(), attemptId: z.number().int() }),
   answers: z.record(z.string(), DraftAnswerSchema),
   queue: z.array(QueueEntrySchema),
   rejectedAnswers: z.record(z.string(), RejectedAnswerSchema),
+  unconfirmedAnswers: z.record(z.string(), UnconfirmedAnswerSchema).default({}),
   lastSyncAt: z.number().nullable(),
 });
 
@@ -120,6 +129,7 @@ function writeStored(state: RuntimeDraftState): void {
     answers: state.answers,
     queue: state.queue,
     rejectedAnswers: state.rejectedAnswers,
+    unconfirmedAnswers: state.unconfirmedAnswers,
     lastSyncAt: state.lastSyncAt,
   };
   try {
@@ -148,6 +158,7 @@ export interface RuntimeDraftState {
   answers: Record<number, DraftAnswer>;
   queue: QueueEntry[];
   rejectedAnswers: Record<number, RejectedAnswer>;
+  unconfirmedAnswers: Record<number, UnconfirmedAnswer>;
   isOffline: boolean;
   lastSyncAt: number | null;
   syncBlock: SyncBlock | null;
@@ -162,6 +173,12 @@ export interface RuntimeDraftState {
   /** Limpia todo el estado y su copia en sessionStorage (completar el intento, cerrar sesión). */
   clearDraft: () => void;
   /**
+   * Nuevo canje de la misma asignación e intento (JWT nuevo): sube el `epoch` para invalidar lo que siga en
+   * vuelo con el JWT anterior y limpia `syncBlock`/`isOffline`. Conserva respuestas, cola y rechazos.
+   * Devuelve `false` si no hay dueño.
+   */
+  renewSession: () => boolean;
+  /**
    * Actualiza el estado local de inmediato (optimista), sube la versión y encola. No toca la red:
    * el envío lo dispara `setAnswer` de `sync.ts`. Devuelve la versión, o `null` si no hay dueño.
    */
@@ -175,6 +192,8 @@ export interface RuntimeDraftState {
   removeFromQueue: (token: DraftOwnerToken, itemId: number, version: number) => boolean;
   /** Rechazo definitivo: fuera de la cola y a `rejectedAnswers` (solo si la versión sigue vigente). */
   rejectAnswer: (token: DraftOwnerToken, itemId: number, version: number, code: string) => boolean;
+  /** Cierre forzado por tiempo con respuestas pendientes: conserva el valor en `unconfirmedAnswers` y limpia `queue`. */
+  recordUnconfirmedOnTimeout: (token: DraftOwnerToken, subtestId: number, itemIds: readonly number[]) => boolean;
   /** Suma un `SUBTEST_NO_INICIADO` a la entrada de esa versión. Devuelve el total, o `null` si ya no aplica. */
   bumpNotStarted: (token: DraftOwnerToken, itemId: number, version: number) => number | null;
   setOffline: (token: DraftOwnerToken, isOffline: boolean) => boolean;
@@ -186,6 +205,7 @@ const emptyData = {
   answers: {} as Record<number, DraftAnswer>,
   queue: [] as QueueEntry[],
   rejectedAnswers: {} as Record<number, RejectedAnswer>,
+  unconfirmedAnswers: {} as Record<number, UnconfirmedAnswer>,
   isOffline: false,
   lastSyncAt: null,
   syncBlock: null,
@@ -259,6 +279,7 @@ export const useRuntimeDraft = create<RuntimeDraftState>()((set, get) => ({
             answers: hydrated.answers as Record<number, DraftAnswer>,
             queue: hydrated.queue,
             rejectedAnswers: hydrated.rejectedAnswers as Record<number, RejectedAnswer>,
+            unconfirmedAnswers: hydrated.unconfirmedAnswers as Record<number, UnconfirmedAnswer>,
             lastSyncAt: hydrated.lastSyncAt,
           }
         : {}),
@@ -271,6 +292,13 @@ export const useRuntimeDraft = create<RuntimeDraftState>()((set, get) => ({
     const { owner, epoch } = get();
     if (owner) removeStored(owner.assignmentId);
     set({ epoch: epoch + 1, ...emptyData, discardNotice: null });
+  },
+
+  renewSession: () => {
+    const state = get();
+    if (!state.owner) return false;
+    set({ epoch: state.epoch + 1, syncBlock: null, isOffline: false });
+    return true;
   },
 
   setAnswerLocal: (itemId, value, timeUsedSeconds, subtestId) => {
@@ -291,12 +319,18 @@ export const useRuntimeDraft = create<RuntimeDraftState>()((set, get) => ({
     };
     const rest = { ...state.rejectedAnswers };
     delete rest[itemId];
+    let unconfirmedAnswers = state.unconfirmedAnswers;
+    if (itemId in unconfirmedAnswers) {
+      unconfirmedAnswers = { ...unconfirmedAnswers };
+      delete unconfirmedAnswers[itemId];
+    }
     set({
       answers: { ...state.answers, [itemId]: answer },
       // Idempotente por ítem: la nueva versión reemplaza a la anterior (y va al final).
       queue: [...state.queue.filter((e) => e.itemId !== itemId), entry],
       // Una respuesta nueva se juzga por sí misma: el rechazo de la anterior ya no aplica.
       rejectedAnswers: rest,
+      unconfirmedAnswers,
     });
     return version;
   },
@@ -344,6 +378,38 @@ export const useRuntimeDraft = create<RuntimeDraftState>()((set, get) => ({
     return true;
   },
 
+  recordUnconfirmedOnTimeout: (token, subtestId, itemIds) => {
+    const state = get();
+    if (!isCurrent(state, token)) return false;
+    const targetSet = new Set(itemIds);
+    if (targetSet.size === 0) return true;
+
+    const nextUnconfirmed = { ...state.unconfirmedAnswers };
+    const movedIds = new Set<number>();
+    const recordedAt = Date.now();
+
+    for (const entry of state.queue) {
+      if (!targetSet.has(entry.itemId)) continue;
+      const answer = state.answers[entry.itemId];
+      if (!answer) continue;
+      nextUnconfirmed[entry.itemId] = {
+        value: answer.value,
+        version: entry.version,
+        subtestId: entry.subtestId ?? subtestId,
+        recordedAt,
+      };
+      movedIds.add(entry.itemId);
+    }
+
+    if (movedIds.size === 0) return true;
+
+    set({
+      unconfirmedAnswers: nextUnconfirmed,
+      queue: state.queue.filter((entry) => !movedIds.has(entry.itemId)),
+    });
+    return true;
+  },
+
   bumpNotStarted: (token, itemId, version) => {
     const state = get();
     if (!isCurrent(state, token)) return null;
@@ -382,6 +448,7 @@ useRuntimeDraft.subscribe((state, prev) => {
     state.answers !== prev.answers ||
     state.queue !== prev.queue ||
     state.rejectedAnswers !== prev.rejectedAnswers ||
+    state.unconfirmedAnswers !== prev.unconfirmedAnswers ||
     state.lastSyncAt !== prev.lastSyncAt
   ) {
     writeStored(state);

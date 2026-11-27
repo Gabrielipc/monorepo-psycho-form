@@ -70,6 +70,37 @@ describe("results endpoints", () => {
     expect(res.attemptStatus).toBe("DESCONOCIDO");
   });
 
+  it("normaliza las fechas sin offset del backend (UTC) a ISO con zona (conventions regla 10)", async () => {
+    server.use(
+      http.get(`${API}/attempts/42/detailed-result`, () => HttpResponse.json({ success: true, data: detailedResultFixture })),
+      http.post(`${API}/attempts/42/score`, () => HttpResponse.json({ success: true, data: scoreAttemptFixture })),
+      http.get(`${API}/manual-review/pending`, () => HttpResponse.json({ success: true, data: pendingReviewsFixture })),
+    );
+
+    const detail = await getDetailedResult(42);
+    expect(detail.startedAt).toBe("2026-10-01T09:00:00.000Z");
+    expect(detail.finishedAt).toBe("2026-10-01T09:18:30.000Z");
+    expect(detail.scoredAt).toBe("2026-10-01T09:19:00.000Z");
+    expect(detail.subtests[0]?.items[0]?.response?.answeredAt).toBe("2026-10-01T09:02:10.000Z");
+
+    expect((await scoreAttempt(42)).scoredAt).toBe("2026-10-01T09:19:00.000Z");
+
+    const [review] = await listPendingReviews();
+    expect(review?.createdAt).toBe("2026-10-01T09:20:00.000Z");
+    expect(review?.reviewedAt).toBeNull();
+  });
+
+  it("rechaza una fecha inválida con CONTRACT_MISMATCH", async () => {
+    server.use(
+      http.get(`${API}/attempts/42/detailed-result`, () =>
+        HttpResponse.json({ success: true, data: { ...detailedResultFixture, startedAt: "no es una fecha" } }),
+      ),
+    );
+    const err = await getDetailedResult(42).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe("CONTRACT_MISMATCH");
+  });
+
   it("getDashboardOverview parses fixture with sessionId query param", async () => {
     let seenSessionId: string | null = null;
     server.use(

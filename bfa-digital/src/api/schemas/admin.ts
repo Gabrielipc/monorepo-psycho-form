@@ -1,10 +1,8 @@
 import { z } from "zod";
+import { serverDateTime } from "./datetime";
 
 export const GeneralStatusSchema = z.enum(["ACTIVO", "INACTIVO", "DESCONOCIDO"]).catch("DESCONOCIDO");
 export type GeneralStatus = z.output<typeof GeneralStatusSchema>;
-
-export const BackupStatusSchema = z.enum(["GENERADO", "DESCONOCIDO"]).catch("DESCONOCIDO");
-export type BackupStatus = z.output<typeof BackupStatusSchema>;
 
 // GET /users, POST /users, PATCH /users/{id}/status -> UserDto
 export const AdminUserSchema = z
@@ -94,13 +92,14 @@ export const AuditLogSchema = z
     valorNuevo: z.string().nullable().optional(),
     direccionIp: z.string().nullable().optional(),
     agenteUsuario: z.string().nullable().optional(),
-    creadoEn: z.string(),
+    creadoEn: serverDateTime,
   })
   .loose()
   .transform((w) => ({
     id: w.id,
     userId: w.usuario?.id ?? null,
     username: w.usuario?.nombreUsuario ?? null,
+    userFullName: w.usuario?.nombreCompleto ?? null,
     action: w.accion,
     entity: w.entidad,
     entityId: w.entidadId ?? null,
@@ -112,29 +111,6 @@ export const AuditLogSchema = z
   }));
 export type AuditLog = z.output<typeof AuditLogSchema>;
 export const AuditLogListSchema = z.array(AuditLogSchema);
-
-// GET /backups, POST /backups -> BackupService.BackupView
-export const BackupSchema = z
-  .object({
-    fileName: z.string(),
-    path: z.string(),
-    sizeBytes: z.number(),
-    generatedAt: z.string(),
-    status: BackupStatusSchema,
-  })
-  .loose();
-export type Backup = z.output<typeof BackupSchema>;
-export const BackupListSchema = z.array(BackupSchema);
-
-// POST /backups/{fileName}/restore-requests -> BackupService.RestoreRequestView
-export const RestoreRequestSchema = z
-  .object({
-    fileName: z.string(),
-    auditId: z.number(),
-    requestedAt: z.string(),
-  })
-  .loose();
-export type RestoreRequest = z.output<typeof RestoreRequestSchema>;
 
 // GET /search -> SearchResult[]
 export const SearchResultSchema = z
@@ -155,7 +131,7 @@ export const NotificationSchema = z
     action: z.string(),
     entity: z.string(),
     entityId: z.string().nullable().optional(),
-    createdAt: z.string(),
+    createdAt: serverDateTime,
   })
   .loose()
   .transform((w) => ({
@@ -167,3 +143,53 @@ export const NotificationSchema = z
   }));
 export type Notification = z.output<typeof NotificationSchema>;
 export const NotificationListSchema = z.array(NotificationSchema);
+
+// ---------------------------------------------------------------------------
+// Formularios de administración (RHF + zod)
+// ---------------------------------------------------------------------------
+
+export interface PasswordRule {
+  id: string;
+  label: string;
+  test: (value: string) => boolean;
+}
+
+export const PASSWORD_RULES: readonly PasswordRule[] = [
+  { id: "length", label: "Mínimo 8 caracteres", test: (v) => v.length >= 8 },
+  { id: "upper", label: "Al menos una letra mayúscula", test: (v) => /[A-Z]/.test(v) },
+  { id: "lower", label: "Al menos una letra minúscula", test: (v) => /[a-z]/.test(v) },
+  { id: "digit", label: "Al menos un número", test: (v) => /\d/.test(v) },
+  { id: "special", label: "Al menos un carácter especial", test: (v) => /[^A-Za-z0-9]/.test(v) },
+];
+
+export const CreateUserFormSchema = z
+  .object({
+    username: z
+      .string()
+      .trim()
+      .min(1, "El nombre de usuario es requerido.")
+      .max(80, "Máximo 80 caracteres.")
+      .regex(/^\S+$/, "El nombre de usuario no puede contener espacios."),
+    fullName: z.string().trim().min(1, "El nombre completo es requerido.").max(150, "Máximo 150 caracteres."),
+    email: z
+      .string()
+      .trim()
+      .min(1, "El correo electrónico es requerido.")
+      .email("Ingrese un correo electrónico válido.")
+      .max(150, "Máximo 150 caracteres."),
+    password: z
+      .string()
+      .min(8, "La contraseña debe tener al menos 8 caracteres.")
+      .refine((v) => /[A-Z]/.test(v), "Incluye al menos una letra mayúscula.")
+      .refine((v) => /[a-z]/.test(v), "Incluye al menos una letra minúscula.")
+      .refine((v) => /\d/.test(v), "Incluye al menos un número.")
+      .refine((v) => /[^A-Za-z0-9]/.test(v), "Incluye al menos un carácter especial."),
+    confirmPassword: z.string().min(1, "Confirme la contraseña inicial."),
+    roleId: z.number().int().positive().optional(),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Las contraseñas no coinciden.",
+    path: ["confirmPassword"],
+  });
+
+export type CreateUserFormValues = z.output<typeof CreateUserFormSchema>;

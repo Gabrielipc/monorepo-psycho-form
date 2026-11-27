@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { clearDeliveredMarkersExcept } from "./deliveredMarker";
+
 interface ParticipantAuthState {
   token: string | null;
   assignmentId: number | null;
@@ -19,7 +21,11 @@ export const useParticipantAuth = create<ParticipantAuthState>()(
     (set) => ({
       token: null,
       assignmentId: null,
-      setSession: ({ token, assignmentId }) => set({ token, assignmentId }),
+      setSession: ({ token, assignmentId }) => {
+        // Canjear un código de otra asignación descarta el marcador de «entregada» de las demás.
+        clearDeliveredMarkersExcept(assignmentId);
+        set({ token, assignmentId });
+      },
       clear: () => set({ token: null, assignmentId: null }),
     }),
     {

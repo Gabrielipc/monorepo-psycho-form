@@ -30,7 +30,7 @@ Este archivo define la arquitectura, los roles, los límites de autoridad y el f
 
 ### 2.3. Revisor y Validador (`GPT 6.2`)
 * **Auditoría independiente:** Evalúa el trabajo consolidado por `Opus 5.5` contra los requerimientos originales del usuario y las buenas prácticas del proyecto.
-* **Enfoque de revisión:** Busca activamente bugs lógicos, regresiones, problemas de seguridad, deuda técnica innecesaria y desalineaciones con el alcance solicitado.
+* **Enfoque de revisión:** Busca activamente bugs lógicos, regresiones, problemas de seguridad, deuda técnica innecesaria y desalineaciones con el alcance solicitado. No te centresen bugs rebuscados o edge cases extremos, prioriza que los bloqueos de cambios sean por problemas que afecten la experiencia del usuario y puedan ser reproducidos dentro de los limites que se encuentran en la interaccion del usuario.
 * **Sin edición directa:** `GPT 6.2` no sobrescribe la arquitectura ni implementa parches por su cuenta; emite un dictamen estructurado (`APROBADO` o `CAMBIOS REQUERIDOS`) para que `Opus 5.5` coordine la corrección.
 
 ---

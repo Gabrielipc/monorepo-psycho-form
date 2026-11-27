@@ -17,6 +17,7 @@ import type {
   DraftOwnerToken,
   FlushResult,
   RejectedAnswerEntry,
+  UnconfirmedAnswerEntry,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -301,10 +302,10 @@ async function onBatchFailure(token: DraftOwnerToken, chunk: Snapshot[], error: 
   for (const snap of chunk) {
     const key = putKey(token, snap.itemId);
     if (inFlightPuts.has(key)) continue; // lo resolverá ese PUT
-    // Una versión más nueva pudo encolarse mientras tanto: se envía la vigente.
+    // Una versión más nueva pudo encolarse mientras tanto: se relee y se envía SOLO la vigente.
     const latest = snapshotItem(snap.itemId);
-    if (!latest || latest.version !== snap.version) continue;
-    const outcome = await sendViaPut(token, snap);
+    if (!latest) continue;
+    const outcome = await sendViaPut(token, latest);
     if (outcome === "halt") return "halt";
   }
   return "done";
@@ -334,36 +335,36 @@ function runSerializedSync(force: boolean): Promise<void> {
 }
 
 /**
- * Un envío de la cola. Nunca rechaza. Sin `force` respeta `isOffline` y las retenciones (los temporizadores
- * y disparadores manuales ya se encargan); con `force` (online, visibilidad, timer, antes de finalizar) intenta igual.
+ * Envía la cola en lotes. Los ítems a enviar se fijan al empezar la pasada, pero NUNCA su contenido: cada lote
+ * se arma en el instante de enviarlo releyendo la cola vigente del store, de modo que solo viaja la última
+ * versión de cada ítem (una respuesta que un PUT ya confirmó mientras corría el lote anterior no puede ser
+ * pisada por una versión vieja: ya no está en la cola y se omite). Los ítems con un PUT en vuelo se omiten (y
+ * se anotan en `waits`): jamás hay dos escrituras del mismo `itemId` en vuelo. Cada lote se arma y se marca
+ * en vuelo de forma síncrona, sin `await` entre medias, para que ningún PUT se cuele entre la relectura y el
+ * envío. Lo que se encole después de empezar la pasada lo envía su propio `setAnswer`/`flush`.
  */
-async function syncOnce(force: boolean): Promise<void> {
-  const token = getOwnerToken();
-  if (!token || !isCurrent(token)) return;
-  const store = useRuntimeDraft.getState();
+async function sendQueuedChunks(token: DraftOwnerToken, waits: Map<string, Promise<void>>): Promise<void> {
+  const itemIds = snapshotQueue().map((snap) => snap.itemId);
+  let cursor = 0;
+  while (cursor < itemIds.length) {
+    if (!isCurrent(token)) return;
+    const live = new Map(snapshotQueue().map((snap) => [snap.itemId, snap] as const));
+    const chunk: Snapshot[] = [];
+    while (cursor < itemIds.length && chunk.length < config.bulkChunkSize) {
+      const itemId = itemIds[cursor];
+      cursor += 1;
+      const snap = itemId === undefined ? undefined : live.get(itemId);
+      if (!snap) continue; // ya confirmado, rechazado o retirado desde que empezó la pasada
+      const key = putKey(token, snap.itemId);
+      const put = inFlightPuts.get(key);
+      if (put) {
+        waits.set(key, put);
+        continue;
+      }
+      chunk.push(snap);
+    }
+    if (chunk.length === 0) continue;
 
-  if (store.queue.length === 0) {
-    store.setOffline(token, false);
-    cancelTimer();
-    retryAttempt = 0;
-    return;
-  }
-  if (!force && (store.isOffline || store.syncBlock)) return;
-
-  const entries = snapshotQueue();
-  // Un ítem con PUT directo en vuelo se deja en la cola: si el POST guardara antes que el PUT, la selección
-  // vieja del PUT ganaría. Se reintenta cuando ese PUT termine.
-  const toSend = entries.filter((snap) => !inFlightPuts.has(putKey(token, snap.itemId)));
-  if (toSend.length < entries.length) {
-    const waits = entries
-      .filter((snap) => inFlightPuts.has(putKey(token, snap.itemId)))
-      .map((snap) => inFlightPuts.get(putKey(token, snap.itemId)) as Promise<void>);
-    void Promise.all(waits).then(() => flush({ force: false }));
-  }
-  if (toSend.length === 0) return;
-
-  for (let i = 0; i < toSend.length; i += config.bulkChunkSize) {
-    const chunk = toSend.slice(i, i + config.bulkChunkSize);
     const keys = chunk.map((snap) => putKey(token, snap.itemId));
     for (const key of keys) inFlightBulk.add(key);
     try {
@@ -381,6 +382,30 @@ async function syncOnce(force: boolean): Promise<void> {
       for (const key of keys) inFlightBulk.delete(key);
     }
   }
+}
+
+/**
+ * Un envío de la cola. Nunca rechaza. Sin `force` respeta `isOffline` y las retenciones (los temporizadores
+ * y disparadores manuales ya se encargan); con `force` (online, visibilidad, timer, antes de finalizar) intenta igual.
+ */
+async function syncOnce(force: boolean): Promise<void> {
+  const token = getOwnerToken();
+  if (!token || !isCurrent(token)) return;
+  const store = useRuntimeDraft.getState();
+
+  if (store.queue.length === 0) {
+    store.setOffline(token, false);
+    cancelTimer();
+    retryAttempt = 0;
+    return;
+  }
+  if (!force && (store.isOffline || store.syncBlock)) return;
+
+  // Un ítem con PUT directo en vuelo se deja en la cola: si el POST guardara antes que el PUT, la selección
+  // vieja del PUT ganaría. Se reintenta cuando ese PUT termine.
+  const waits = new Map<string, Promise<void>>();
+  await sendQueuedChunks(token, waits);
+  if (waits.size > 0) void Promise.all(waits.values()).then(() => flush({ force: false }));
 
   if (isCurrent(token) && useRuntimeDraft.getState().queue.length === 0) {
     cancelTimer();
@@ -442,22 +467,94 @@ async function sendItem(itemId: number): Promise<void> {
 // API pública
 // ---------------------------------------------------------------------------
 
+/** Opciones de `setAnswer`. */
+export interface SetAnswerOptions {
+  /**
+   * Retraso (ms) SOLO del envío por red. El estado local (draft + cola, con su `itemId`) se registra siempre al
+   * instante; el timer se limita a agrupar ráfagas de cambios del mismo ítem (p. ej. texto abierto mientras se
+   * escribe) en un único envío de la versión vigente. Cualquier flush (finalizar, reanudar, online…) lo adelanta.
+   */
+  debounceMs?: number;
+  /**
+   * Intento de origen de la respuesta. Si el draft ya pertenece a otro intento, la respuesta se descarta
+   * (`STALE_PARTICIPANT`) en vez de caer en el estado del dueño nuevo.
+   */
+  attemptId?: number;
+}
+
+interface PendingSend {
+  timer: ReturnType<typeof setTimeout>;
+  resolvers: Array<() => void>;
+}
+
+/** Envíos por red diferidos (debounce), por ítem. El contenido ya está en la cola: aquí solo vive el timer. */
+const pendingSends = new Map<string, PendingSend>();
+
+/** Cancela los timers de envío diferido. Lo local ya está en la cola: lo envía el flush que los adelanta. */
+function releasePendingSends(): void {
+  for (const pending of pendingSends.values()) {
+    clearTimeout(pending.timer);
+    for (const resolve of pending.resolvers) resolve();
+  }
+  pendingSends.clear();
+}
+
+function scheduleDebouncedSend(token: DraftOwnerToken, itemId: number, delayMs: number): Promise<void> {
+  const key = putKey(token, itemId);
+  return new Promise<void>((resolve) => {
+    const previous = pendingSends.get(key);
+    if (previous) clearTimeout(previous.timer);
+    const resolvers = [...(previous?.resolvers ?? []), resolve];
+    const timer = setTimeout(() => {
+      pendingSends.delete(key);
+      const settle = (): void => {
+        for (const done of resolvers) done();
+      };
+      if (!isCurrent(token)) {
+        settle();
+        return;
+      }
+      void sendItem(itemId).finally(settle); // sendItem relee la versión vigente del store
+    }, delayMs);
+    pendingSends.set(key, { timer, resolvers });
+  });
+}
+
 /**
  * Registra la respuesta: estado local inmediato (optimista), versión nueva, cola y envío (PUT individual).
  * Resuelve cuando el intento de envío terminó (puede quedar en cola si no hay red); nunca rechaza por red.
- * Lanza si no hay dueño enlazado (`bindDraftOwner`).
+ * Lanza si no hay dueño enlazado (`bindDraftOwner`). Rechaza con `STALE_PARTICIPANT` si `options.attemptId`
+ * ya no es el del draft.
  */
 export function setAnswer(
   itemId: number,
   value: AnswerValue,
   timeUsedSeconds?: number,
   subtestId?: number,
+  options: SetAnswerOptions = {},
 ): Promise<void> {
-  const version = useRuntimeDraft.getState().setAnswerLocal(itemId, value, timeUsedSeconds, subtestId);
+  const store = useRuntimeDraft.getState();
+  if (options.attemptId !== undefined && store.owner !== null && store.owner.attemptId !== options.attemptId) {
+    return Promise.reject(staleError());
+  }
+  const version = store.setAnswerLocal(itemId, value, timeUsedSeconds, subtestId);
   if (version === null) {
     throw new Error("runtimeDraft: no hay un dueño enlazado. Llame a bindDraftOwner() antes de responder.");
   }
-  return sendItem(itemId);
+  const token = getOwnerToken();
+  if (token && (options.debounceMs ?? 0) > 0) return scheduleDebouncedSend(token, itemId, options.debounceMs as number);
+  const sending = sendItem(itemId);
+  // Un envío inmediato sustituye a uno diferido del mismo ítem (la versión vigente ya sale ahora).
+  const key = token ? putKey(token, itemId) : null;
+  const deferred = key === null ? undefined : pendingSends.get(key);
+  if (key !== null && deferred) {
+    clearTimeout(deferred.timer);
+    pendingSends.delete(key);
+    void sending.finally(() => {
+      for (const resolve of deferred.resolvers) resolve();
+    });
+  }
+  return sending;
 }
 
 const inSubtest = (entrySubtestId: number | undefined, subtestId: number): boolean =>
@@ -496,6 +593,7 @@ export async function flushBeforeFinish(subtestId: number, options: { maxRounds?
   if (!token) return { ok: true, pending: [], rejected: [] };
   assertCurrent(token);
 
+  releasePendingSends(); // lo diferido ya está en la cola: sale en este flush
   cancelTimer();
   retryAttempt = 0;
   const rounds = Math.max(1, options.maxRounds ?? 3);
@@ -516,12 +614,69 @@ export async function flushBeforeFinish(subtestId: number, options: { maxRounds?
   return { ok: pending.length === 0 && rejected.length === 0, pending, rejected };
 }
 
+/**
+ * Vacía TODA la cola pendiente del participante antes de finalizar el intento definitivo.
+ * Devuelve el estado resultante (no descarta respuestas pendientes ni rechazos).
+ */
+export async function flushAllBeforeFinish(options: { maxRounds?: number } = {}): Promise<FlushResult> {
+  const token = getOwnerToken();
+  if (!token) return { ok: true, pending: [], rejected: [] };
+  assertCurrent(token);
+
+  releasePendingSends();
+  cancelTimer();
+  retryAttempt = 0;
+  const rounds = Math.max(1, options.maxRounds ?? 3);
+  for (let round = 0; round < rounds; round += 1) {
+    await awaitInFlightPuts(token);
+    assertCurrent(token);
+    if (useRuntimeDraft.getState().queue.length === 0) break;
+    await flush({ force: true });
+    assertCurrent(token);
+    const { isOffline, syncBlock } = useRuntimeDraft.getState();
+    if (isOffline || syncBlock) break;
+  }
+  await awaitInFlightPuts(token);
+  assertCurrent(token);
+
+  const { queue, rejectedAnswers } = useRuntimeDraft.getState();
+  const pending = queue.map((entry) => entry.itemId);
+  const rejected: RejectedAnswerEntry[] = Object.entries(rejectedAnswers).map(([itemId, entry]) => ({
+    itemId: Number(itemId),
+    ...entry,
+  }));
+  return { ok: pending.length === 0 && rejected.length === 0, pending, rejected };
+}
+
+/**
+ * Cuando el tiempo límite obliga a cerrar el subtest y quedaron respuestas sin confirmar,
+ * las traslada de `queue` a `unconfirmedAnswers` para conservarlas y exponerlas al participante.
+ */
+export function markSubtestPendingUnconfirmed(
+  subtestId: number,
+  itemIds?: readonly number[],
+): UnconfirmedAnswerEntry[] {
+  const token = getOwnerToken();
+  if (!token || !isCurrent(token)) return [];
+  const targetIds = itemIds ?? pendingFor(subtestId);
+  if (targetIds.length === 0) return [];
+  const targetSet = new Set(targetIds);
+  const applied = useRuntimeDraft.getState().recordUnconfirmedOnTimeout(token, subtestId, targetIds);
+  if (!applied) return [];
+  const { unconfirmedAnswers } = useRuntimeDraft.getState();
+  return Object.entries(unconfirmedAnswers)
+    .filter(([id]) => targetSet.has(Number(id)))
+    .map(([id, entry]) => ({ itemId: Number(id), ...entry }))
+    .sort((a, b) => a.recordedAt - b.recordedAt || a.itemId - b.itemId);
+}
+
 /** Reanuda la sincronización retenida (p. ej. la sesión dejó de estar pausada) y vacía la cola. */
 export async function resumeSync(): Promise<void> {
   const token = getOwnerToken();
   if (!token || !isCurrent(token)) return;
   const store = useRuntimeDraft.getState();
   store.setSyncBlock(token, null);
+  releasePendingSends();
   cancelTimer();
   retryAttempt = 0;
   if (store.queue.length > 0) await flush({ force: true });
@@ -531,9 +686,27 @@ function onTrigger(): void {
   const token = getOwnerToken();
   if (!token || !isCurrent(token)) return;
   if (useRuntimeDraft.getState().queue.length === 0) return;
+  releasePendingSends();
   cancelTimer();
   retryAttempt = 0;
   void flush({ force: true });
+}
+
+/**
+ * Nuevo canje de la MISMA asignación (el JWT de `participantAuth` cambió): las peticiones del JWT anterior que
+ * sigan en vuelo dejan de ser válidas (nuevo `epoch`), se limpia la retención (p. ej. `UNAUTHORIZED`) y el estado
+ * offline, y la cola del mismo intento se conserva. No envía nada: el runner reanuda (`resumeSync`) tras validar
+ * el acceso con `/yo`. Con otra asignación no hace nada: `bindDraftOwner` descartará el estado ajeno.
+ */
+function onParticipantAuthChanged(
+  state: { token: string | null; assignmentId: number | null },
+  prev: { token: string | null },
+): void {
+  if (state.token === prev.token || state.token === null) return;
+  const { owner, renewSession } = useRuntimeDraft.getState();
+  if (!owner || owner.assignmentId !== state.assignmentId) return;
+  renewSession();
+  resetEngineState();
 }
 
 let removeListeners: (() => void) | null = null;
@@ -547,15 +720,18 @@ export function startDraftSyncListeners(): () => void {
   };
   window.addEventListener("online", onTrigger);
   document.addEventListener("visibilitychange", onVisibility);
+  const unsubscribeAuth = useParticipantAuth.subscribe(onParticipantAuthChanged);
   removeListeners = () => {
     window.removeEventListener("online", onTrigger);
     document.removeEventListener("visibilitychange", onVisibility);
+    unsubscribeAuth();
     removeListeners = null;
   };
   return removeListeners;
 }
 
 function resetEngineState(): void {
+  releasePendingSends();
   cancelTimer();
   retryAttempt = 0;
   nextForce = false;

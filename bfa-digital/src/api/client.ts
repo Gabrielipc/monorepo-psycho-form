@@ -55,6 +55,12 @@ declare module "axios" {
     metadata?: { sentToken: string | null };
     /** Desactiva el toast automático de 403 (staff, métodos no-GET). */
     silent403?: boolean;
+    /**
+     * Predicado opcional que fija quien emite la petición (F2-FIX-7): si al volver con 401 devuelve `false`, la
+     * respuesta quedó obsoleta para quien la pidió y el interceptor NO cierra la sesión ni navega; el error sube y
+     * quien emitió la petición lo descarta. Mantiene `api/` desacoplado de `features/`.
+     */
+    isStillRelevant?: () => boolean;
   }
 }
 
@@ -108,7 +114,10 @@ export function createApiClient(
         // Solo si la petición salió con el token vigente: si la sesión cambió mientras
         // volaba, el 401 pertenece a la sesión anterior y se rechaza sin limpiar.
         const sentToken = config?.metadata?.sentToken ?? null;
-        if (!isCredentialUrl(config?.url) && sentToken === getToken()) onUnauthorized(sentToken);
+        // Si quien emitió la petición ya la considera obsoleta (`isStillRelevant() === false`), el 401 no cierra la
+        // sesión: el error sube y el emisor lo descarta.
+        const stillRelevant = config?.isStillRelevant?.() ?? true;
+        if (!isCredentialUrl(config?.url) && sentToken === getToken() && stillRelevant) onUnauthorized(sentToken);
       }
       // 403: la sesión es válida pero sin permiso. NO se hace logout; se avisa al usuario
       // una sola vez por petición (el interceptor corre una vez) si fue una acción de escritura.
@@ -148,13 +157,26 @@ const handleStaffUnauthorized = (sentToken: string | null): void => {
 // Logout automático por expiración del JWT: misma salida que un 401.
 setSessionExpiredHandler(redirectToLogin);
 
+/** Rutas fijas del área del participante; cualquier otro `/evaluacion/<segmento>` es el canje `/evaluacion/$code`. */
+const PARTICIPANT_FIXED_SEGMENTS = new Set(["acceso", "sesion", "subtests"]);
+
+/** ¿La pestaña está canjeando un código (`/evaluacion/$code`)? */
+export function isParticipantRedeemPath(path: string): boolean {
+  const match = /^\/evaluacion\/([^/?#]+)\/?(?:[?#].*)?$/.exec(path);
+  return match !== null && !PARTICIPANT_FIXED_SEGMENTS.has(match[1]!);
+}
+
 const handleParticipantUnauthorized = (): void => {
   const { token, clear } = useParticipantAuth.getState();
   if (!token) return;
   clear();
   // Solo se navega si el participante está en su área: si la pestaña está en /app (staff) o en
   // otra ruta, el 401 tardío de una petición del participante no debe arrastrar la navegación.
-  if (!isEvaluationPath(getCurrentPath())) return;
+  const path = getCurrentPath();
+  if (!isEvaluationPath(path)) return;
+  // Durante el canje de OTRO código (401 tardío del participante anterior mientras el nuevo canje sigue en
+  // vuelo) no se navega: basta con limpiar la sesión anterior; el canje en curso guarda la nueva.
+  if (isParticipantRedeemPath(path)) return;
   navigateTo({ to: "/evaluacion/acceso", replace: true });
 };
 

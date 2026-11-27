@@ -12,6 +12,11 @@ import { Button } from "../../app/components/ui/button";
 import { Card, CardContent } from "../../app/components/ui/card";
 import { Input } from "../../app/components/ui/input";
 import { Label } from "../../app/components/ui/label";
+import {
+  clearPendingAccessError,
+  consumePendingAccessError,
+  peekPendingAccessError,
+} from "../../features/runtime/accessError";
 import { isStaleParticipantError } from "../../features/runtime/draft";
 import { useParticipantAuth } from "../../store/participantAuth";
 
@@ -53,7 +58,7 @@ function EvaluacionAccesoRoute() {
 
   const [codeInput, setCodeInput] = useState(searchCode ?? "");
   const [prevSearchCode, setPrevSearchCode] = useState(searchCode);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => (searchCode ? null : peekPendingAccessError()));
   const [submitting, setSubmitting] = useState(Boolean(searchCode));
 
   if (searchCode !== prevSearchCode) {
@@ -64,6 +69,12 @@ function EvaluacionAccesoRoute() {
       setSubmitting(true);
     }
   }
+
+  useEffect(() => {
+    if (!searchCode) {
+      consumePendingAccessError();
+    }
+  }, [searchCode]);
 
   const attemptSeqRef = useRef(0);
   const mountedRef = useRef(true);
@@ -119,6 +130,7 @@ function EvaluacionAccesoRoute() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    clearPendingAccessError();
     const seq = ++attemptSeqRef.current;
     setError(null);
     setSubmitting(true);
@@ -169,6 +181,7 @@ function EvaluacionAccesoRoute() {
                   disabled={submitting}
                   aria-invalid={error ? true : undefined}
                   onChange={(e) => {
+                    clearPendingAccessError();
                     setCodeInput(e.target.value);
                     if (error) setError(null);
                   }}

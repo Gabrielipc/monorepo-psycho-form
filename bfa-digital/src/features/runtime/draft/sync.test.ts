@@ -24,8 +24,10 @@ import {
   clearRuntimeDraft,
   configureDraftSync,
   flush,
+  flushAllBeforeFinish,
   flushBeforeFinish,
   isStaleParticipantError,
+  markSubtestPendingUnconfirmed,
   resumeSync,
   setAnswer,
 } from "./sync";
@@ -678,6 +680,38 @@ describe("flushBeforeFinish", () => {
   it("sin dueño enlazado no hace nada", async () => {
     store().clearDraft();
     await expect(flushBeforeFinish(7)).resolves.toEqual({ ok: true, pending: [], rejected: [] });
+  });
+
+  it("flushAllBeforeFinish devuelve pendientes si falla 5xx y vacía toda la cola al recuperarse", async () => {
+    enqueue(1, 10, 7);
+    enqueue(2, 20, 8);
+    let failSync = true;
+    mockRuntimeApi({
+      bulk: (body) =>
+        failSync
+          ? fail(503, "UNAVAILABLE", "Sin conexión")
+          : ok(body.map((a) => bulkResult(a.itemId, "GUARDADA"))),
+    });
+
+    const first = await flushAllBeforeFinish();
+    expect(first.ok).toBe(false);
+    expect(first.pending).toEqual([1, 2]);
+
+    failSync = false;
+    const second = await flushAllBeforeFinish();
+    expect(second).toEqual({ ok: true, pending: [], rejected: [] });
+    expect(queuedIds()).toEqual([]);
+  });
+
+  it("markSubtestPendingUnconfirmed traslada los pendientes del subtest a unconfirmedAnswers", () => {
+    enqueue(1, 10, 7);
+    enqueue(2, 20, 8);
+
+    const moved = markSubtestPendingUnconfirmed(7);
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatchObject({ itemId: 1, subtestId: 7, value: single(10) });
+    expect(queuedIds()).toEqual([2]);
+    expect(store().unconfirmedAnswers[1]).toMatchObject({ subtestId: 7, value: single(10) });
   });
 });
 

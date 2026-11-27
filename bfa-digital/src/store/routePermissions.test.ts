@@ -7,9 +7,12 @@ import { ROUTE_PERMISSIONS } from "./routePermissions";
 const ROUTES_DIR = path.resolve(__dirname, "../routes/app");
 // Rutas de primer nivel (sin puntos en el nombre): las hijas heredan el guard del layout padre,
 // salvo que el mapa declare una clave propia para ellas.
+// Las rutas retiradas que solo redirigen (sin pantalla propia) no tienen permiso: lo aplica el destino.
+const REDIRECT_ONLY = ["carga-imagenes"];
 const topLevel = readdirSync(ROUTES_DIR)
   .filter((f) => f.endsWith(".tsx") && !f.slice(0, -4).includes("."))
-  .map((f) => f.slice(0, -4));
+  .map((f) => f.slice(0, -4))
+  .filter((name) => !REDIRECT_ONLY.includes(name));
 
 /** `/app/sesiones/nueva` -> `sesiones.nueva.tsx` (convención de archivos de TanStack Router). */
 const routeFile = (route: string): string => `${route.slice("/app/".length).replaceAll("/", ".")}.tsx`;
@@ -43,8 +46,15 @@ describe("ROUTE_PERMISSIONS", () => {
     }
   });
 
-  it("permisos asignados: carga de imágenes exige TEST_CREAR y crear sesión exige SESION_CREAR", () => {
-    expect(ROUTE_PERMISSIONS["/app/carga-imagenes"]).toEqual([PERMISSIONS.TEST_CREAR]);
+  it("las rutas retiradas redirigen a /app/instrumentos y no declaran permiso propio", () => {
+    for (const name of REDIRECT_ONLY) {
+      expect(ROUTE_PERMISSIONS).not.toHaveProperty([`/app/${name}`]);
+      const source = readFileSync(path.join(ROUTES_DIR, `${name}.tsx`), "utf8");
+      expect(source, name).toContain('redirect({ to: "/app/instrumentos" })');
+    }
+  });
+
+  it("permisos asignados: crear sesión exige SESION_CREAR", () => {
     expect(ROUTE_PERMISSIONS["/app/sesiones/nueva"]).toEqual([PERMISSIONS.SESION_CREAR]);
   });
 });

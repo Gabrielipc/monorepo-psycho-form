@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { createFileRoute, Outlet, redirect, useNavigate } from "@tanstack/react-router";
-import { AlertCircle, AlertTriangle, Clock, Lock, PauseCircle, RefreshCw, ShieldAlert } from "lucide-react";
+import { AlertCircle, AlertTriangle, CheckCircle2, Clock, Lock, PauseCircle, RefreshCw, ShieldAlert } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "../../app/components/ui/alert";
 import { Brand } from "../../app/components/brand";
@@ -11,6 +11,7 @@ import { StatusBadge } from "../../app/components/ui/status-badge";
 import { RunnerProvider, useRunner } from "../../features/runtime/RunnerContext";
 import { useDiscardNotice } from "../../features/runtime/draft";
 import type { BlockReason } from "../../features/runtime/machine";
+import { deliveredHadUnconfirmed } from "../../store/deliveredMarker";
 import { useParticipantAuth } from "../../store/participantAuth";
 
 export const Route = createFileRoute("/evaluacion/_runner")({
@@ -59,7 +60,13 @@ const BLOCK_MESSAGES: Record<BlockReason, { title: string; description: string }
   },
   asignacionNoOperable: {
     title: "Asignación no operable",
-    description: "Su asignación fue anulada o ya no se encuentra activa en esta sesión.",
+    description:
+      "Esta evaluación ya no admite respuestas. Si ya la entregaste, tus respuestas quedaron registradas. Consulta al aplicador si tienes dudas.",
+  },
+  evaluacionEntregada: {
+    title: "Evaluación entregada",
+    description:
+      "Tu evaluación fue entregada. Si tienes dudas sobre tus respuestas, consulta al aplicador. No es posible modificarlas. Puedes cerrar esta ventana.",
   },
 };
 
@@ -95,6 +102,7 @@ function DiscardNoticeBanner() {
 
 function RunnerShell() {
   const navigate = useNavigate();
+  const assignmentId = useParticipantAuth((s) => s.assignmentId);
   const { state, evaluation, remainingTimeMs, evaluationError, refetchEvaluation } = useRunner();
 
   useEffect(() => {
@@ -230,8 +238,16 @@ function RunnerShell() {
                 <Brand />
               </div>
 
-              <div className="mx-auto flex size-12 items-center justify-center rounded-full border border-status-danger-border bg-status-danger-bg text-status-danger-fg">
-                {state.reason === "accesoRevocado" ? (
+              <div
+                className={
+                  state.reason === "evaluacionEntregada"
+                    ? "mx-auto flex size-12 items-center justify-center rounded-full border border-status-success-border bg-status-success-bg text-status-success-fg"
+                    : "mx-auto flex size-12 items-center justify-center rounded-full border border-status-danger-border bg-status-danger-bg text-status-danger-fg"
+                }
+              >
+                {state.reason === "evaluacionEntregada" ? (
+                  <CheckCircle2 className="size-6" aria-hidden="true" />
+                ) : state.reason === "accesoRevocado" ? (
                   <ShieldAlert className="size-6" aria-hidden="true" />
                 ) : (
                   <Lock className="size-6" aria-hidden="true" />
@@ -242,6 +258,20 @@ function RunnerShell() {
                 <h1 className="text-xl font-semibold tracking-tight text-foreground">{info.title}</h1>
                 <p className="text-sm text-muted-foreground leading-relaxed">{info.description}</p>
               </div>
+
+              {state.reason === "evaluacionEntregada" && deliveredHadUnconfirmed(assignmentId) && (
+                <Alert
+                  role="alert"
+                  className="border-status-warning-border bg-status-warning-bg text-status-warning-fg text-left"
+                >
+                  <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+                  <AlertTitle>Algunas respuestas pudieron no sincronizarse</AlertTitle>
+                  <AlertDescription className="text-status-warning-fg text-xs">
+                    Al entregar quedaban respuestas sin confirmar en el servidor. Avisa al aplicador para que verifique
+                    tus respuestas.
+                  </AlertDescription>
+                </Alert>
+              )}
 
               <Button
                 type="button"

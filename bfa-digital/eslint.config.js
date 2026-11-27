@@ -4,20 +4,6 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 
 /**
- * DEUDA TEMPORAL (F-01): archivos legacy que todavía usan alert()/confirm().
- * Se degradan a "warn" para que `npm run lint` pase; cada refactor de pantalla
- * debe eliminar su entrada de esta lista (F3: <ConfirmDialog> + sonner).
- */
-const LEGACY_ALERT_FILES = [
-  "src/app/components/screens/admin/participants.tsx",
-  "src/app/components/screens/admin/reports.tsx",
-  "src/app/components/screens/admin/review-tray.tsx",
-  "src/app/components/screens/admin/session-create.tsx",
-  "src/app/components/screens/admin/users.tsx",
-  "src/app/components/screens/catalog-screens.tsx",
-];
-
-/**
  * Archivos shadcn/ui generados originales (código de terceros): fuera del lint.
  * Los componentes propios de la capa UI (status-badge, page-header, confirm-dialog,
  * data-table, empty-state, loading-state) NO están aquí: se lintean con reglas estrictas.
@@ -80,10 +66,8 @@ const GENERATED_SHADCN_FILES = [
 const STRICT_NEW_CODE = [
   "src/api/client.ts",
   "src/api/errors.ts",
-  "src/api/axios.ts",
   "src/store/staffAuth.ts",
   "src/store/participantAuth.ts",
-  "src/store/authStore.ts",
   "src/store/accountReset.ts",
   "src/store/ensureStaffUser.ts",
   "src/store/routePermissions.ts",
@@ -131,10 +115,6 @@ export default tseslint.config(
       "react-hooks/purity": "warn",
       "react-hooks/immutability": "warn",
     },
-  },
-  {
-    files: LEGACY_ALERT_FILES,
-    rules: { "no-alert": "warn" },
   },
   {
     files: STRICT_NEW_CODE,

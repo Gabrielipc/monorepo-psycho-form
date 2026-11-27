@@ -10,10 +10,10 @@ import {
   Clock,
   LayoutGrid,
   Loader2,
+  RefreshCw,
   WifiOff,
 } from "lucide-react";
 
-import type { Evaluation } from "../../../api/schemas/runtime";
 import { Alert, AlertDescription, AlertTitle } from "../../../app/components/ui/alert";
 import { Brand } from "../../../app/components/brand";
 import { Button } from "../../../app/components/ui/button";
@@ -39,7 +39,8 @@ import {
   isSubtestOpenable,
   isValidOrdinal,
 } from "../../../features/runtime/machine";
-import { evaluationQueryOptions, subtestItemsQueryOptions } from "../../../features/runtime/queries";
+import { isTicketCurrent } from "../../../features/runtime/evaluation-guard";
+import { ensureCurrentEvaluation, subtestItemsQueryOptions } from "../../../features/runtime/queries";
 import { AnswerRenderer } from "../../../features/runtime/renderers";
 import { useParticipantAuth } from "../../../store/participantAuth";
 
@@ -63,12 +64,9 @@ export const Route = createFileRoute("/evaluacion/_runner/subtests/$subtestId/it
       throw redirect({ to: "/evaluacion/acceso", replace: true });
     }
 
-    let evaluation: Evaluation;
-    try {
-      evaluation = await context.queryClient.ensureQueryData(evaluationQueryOptions(assignmentId));
-    } catch {
-      return;
-    }
+    // Solo se decide con un /yo vigente (F2-FIX-6); sin confirmación se deja montar y el runner corrige después.
+    const evaluation = await ensureCurrentEvaluation(context.queryClient, assignmentId);
+    if (evaluation === null) return;
 
     if (!isSubtestOpenable(evaluation, params.subtestId)) {
       throw redirect({ to: "/evaluacion/sesion", replace: true });
@@ -94,6 +92,10 @@ export const Route = createFileRoute("/evaluacion/_runner/subtests/$subtestId/it
         return;
       }
     }
+
+    // El await de los ítems pudo durar lo suficiente para que el /yo con el que se decide quedara invalidado
+    // (pestaña oculta, cambio de dueño): sin ticket vigente NO se corrige el ordinal (F2-FIX-7).
+    if (!isTicketCurrent(evaluation)) return;
 
     if (items.length > 0 && !isValidOrdinal(params.ordinal, items.length)) {
       throw redirect({
@@ -138,11 +140,16 @@ function SubtestItemRunnerRoute() {
     assignmentId,
     remainingTimeMs,
     isFinishingSubtest,
+    isRetryingSync,
+    isReconnecting,
+    isVerifyingTime,
+    isTimeLocked,
     actionError,
     clearActionError,
     ensureItemsRoute,
     goToItemAction,
     finishSubtestAction,
+    retrySyncAction,
     getItemValue,
     saveItemValue,
     setActiveItem,
@@ -176,8 +183,10 @@ function SubtestItemRunnerRoute() {
   const currentItem = items[safeOrdinal - 1];
   const nextItem = items[safeOrdinal];
 
-  // Si llegó a un ordinal fuera de rango después de cargar ítems, normaliza la URL.
+  // Si llegó a un ordinal fuera de rango después de cargar ítems, normaliza la URL. Solo decide con una evaluación
+  // vigente (F2-FIX-7); si no lo está, espera el siguiente /yo vigente (cambia `evaluation` y el efecto se repite).
   useEffect(() => {
+    if (!isTicketCurrent(evaluation)) return;
     if (totalItems > 0 && ordinal !== safeOrdinal) {
       void navigate({
         to: "/evaluacion/subtests/$subtestId/items/$ordinal",
@@ -185,16 +194,23 @@ function SubtestItemRunnerRoute() {
         replace: true,
       });
     }
-  }, [totalItems, ordinal, safeOrdinal, subtestId, navigate]);
+  }, [evaluation, totalItems, ordinal, safeOrdinal, subtestId, navigate]);
 
   // Recuperación tras recarga o sincronización de ordinal con la máquina
   useEffect(() => {
-    void ensureItemsRoute(subtestId, safeOrdinal);
+    const controller = new AbortController();
+    void ensureItemsRoute(subtestId, safeOrdinal, { signal: controller.signal });
+    return () => {
+      controller.abort();
+    };
   }, [ensureItemsRoute, subtestId, safeOrdinal, state.kind]);
 
   // Redirección reactiva si el polling cierra/anula el subtest abierto o cambia de fase
+  // Solo decide con una evaluación vigente (F2-FIX-7): un /yo invalidado (pestaña oculta) no desvía; se espera el
+  // siguiente /yo vigente.
   useEffect(() => {
     if (!evaluation) return;
+    if (!isTicketCurrent(evaluation)) return;
     if (
       state.kind === "pausada" ||
       state.kind === "bloqueado" ||
@@ -220,13 +236,19 @@ function SubtestItemRunnerRoute() {
     }
   }, [evaluation, state.kind, subtestId, subtest, navigate]);
 
-  // Medición real del tiempo activo del ítem
+  // Medición real del tiempo activo del ítem. El efecto depende del `id` del ítem (no del objeto): un /yo del
+  // polling trae objetos nuevos y no debe contar como "salir del ítem" (al salir se persiste el tiempo de revisión).
+  const currentItemRef = useRef(currentItem);
   useEffect(() => {
-    setActiveItem(currentItem ?? null, subtestId);
+    currentItemRef.current = currentItem;
+  });
+  const currentItemId = currentItem?.id;
+  useEffect(() => {
+    setActiveItem(currentItemRef.current ?? null, subtestId);
     return () => {
       setActiveItem(null, null);
     };
-  }, [currentItem, subtestId, setActiveItem]);
+  }, [currentItemId, subtestId, setActiveItem]);
 
   // Prefetch de imágenes del siguiente ítem
   useEffect(() => {
@@ -263,11 +285,14 @@ function SubtestItemRunnerRoute() {
 
   const isModalOpen = itemMapOpen || finishDialogOpen;
   const isDisabled = state.kind !== "respondiendo" || isFinishingSubtest;
-  const hotkeysActive = !isModalOpen && !isDisabled;
+  // Con el plazo local vencido hace > N s sin confirmar con el servidor se bloquea SOLO la edición de la respuesta.
+  const isAnswerLocked = isDisabled || isTimeLocked;
+  const hotkeysActive = !isModalOpen && !isAnswerLocked;
 
-  // Navegación por teclado ← / → sin interferir con inputs ni modales
+  // Navegación por teclado ← / → sin interferir con inputs ni modales; bloqueada igual que los botones mientras se
+  // finaliza el subtest (o la sesión está pausada/cerrada): `isDisabled`.
   useEffect(() => {
-    if (isModalOpen || totalItems <= 0) return;
+    if (isModalOpen || isDisabled || totalItems <= 0) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
@@ -284,7 +309,7 @@ function SubtestItemRunnerRoute() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isModalOpen, totalItems, safeOrdinal, navigateToOrdinal]);
+  }, [isModalOpen, isDisabled, totalItems, safeOrdinal, navigateToOrdinal]);
 
   const subtestItemIds = useMemo(() => new Set(items.map((it) => it.id)), [items]);
   const rejectedInSubtest = useMemo(
@@ -330,11 +355,17 @@ function SubtestItemRunnerRoute() {
         {timerAnnouncement}
       </div>
       <div aria-live="polite" className="sr-only">
-        {syncStatus.isOffline
-          ? "Sin conexión. Respuestas guardadas localmente."
-          : syncStatus.pending > 0
-            ? `Guardando ${syncStatus.pending} respuestas.`
-            : "Respuestas guardadas."}
+        {isReconnecting
+          ? isTimeLocked
+            ? "Reconectando con el servidor. La edición está bloqueada hasta confirmar el tiempo restante."
+            : "Reconectando con el servidor para confirmar el tiempo restante."
+          : isVerifyingTime
+            ? "Verificando el tiempo restante con el servidor."
+            : syncStatus.isOffline
+              ? "Sin conexión. Respuestas guardadas localmente."
+              : syncStatus.pending > 0
+                ? `Guardando ${syncStatus.pending} respuestas.`
+                : "Respuestas guardadas."}
       </div>
 
       {/* Header fijo de modo examen (sin enlaces de salida) */}
@@ -352,6 +383,28 @@ function SubtestItemRunnerRoute() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* /yo falló al confirmar el plazo: se reintenta sin cerrar el subtest por el plazo local */}
+            {isReconnecting && (
+              <div
+                role="status"
+                className="inline-flex items-center gap-1.5 rounded-full border border-status-warning-border bg-status-warning-bg px-2.5 py-1 text-xs font-medium text-status-warning-fg"
+              >
+                <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                <span>Reconectando…</span>
+              </div>
+            )}
+
+            {/* El plazo local venció: se consulta al servidor antes de cerrar nada */}
+            {isVerifyingTime && !isReconnecting && (
+              <div
+                role="status"
+                className="inline-flex items-center gap-1.5 rounded-full border border-status-info-border bg-status-info-bg px-2.5 py-1 text-xs font-medium text-status-info-fg"
+              >
+                <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                <span>Verificando tiempo…</span>
+              </div>
+            )}
+
             {/* Indicador sobrio de guardado / sincronización */}
             <div
               className={cn(
@@ -469,6 +522,22 @@ function SubtestItemRunnerRoute() {
               <AlertTitle>No se pudo completar la acción</AlertTitle>
               <AlertDescription className="text-status-danger-fg space-y-2">
                 <p>{actionError}</p>
+                {syncStatus.pending > 0 && state.kind === "respondiendo" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isRetryingSync}
+                    className="gap-1.5 border-status-danger-border bg-card text-foreground hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring"
+                    onClick={() => void retrySyncAction()}
+                  >
+                    <RefreshCw
+                      className={cn("size-3.5", isRetryingSync && "animate-spin")}
+                      aria-hidden="true"
+                    />
+                    Reintentar sincronización
+                  </Button>
+                )}
                 {state.kind === "finalizandoSubtest" &&
                   state.reason === "tiempo" &&
                   !isFinishingSubtest && (
@@ -541,7 +610,7 @@ function SubtestItemRunnerRoute() {
                       onChange={(nextValue) => {
                         void saveItemValue(currentItem, subtestId, nextValue);
                       }}
-                      disabled={isDisabled}
+                      disabled={isAnswerLocked}
                       hotkeysActive={hotkeysActive}
                       labelledBy={promptId}
                       renderImage={(image) => (
@@ -763,7 +832,8 @@ function SubtestItemRunnerRoute() {
               <p className="text-xs text-muted-foreground tabular-nums">
                 Hay {syncStatus.pending}{" "}
                 {syncStatus.pending === 1 ? "respuesta por sincronizar" : "respuestas por sincronizar"}; se
-                intentará el envío antes de cerrar.
+                intentará el envío antes de cerrar. Si falla la sincronización, el subtest no se cerrará
+                hasta confirmar sus respuestas.
               </p>
             )}
           </div>

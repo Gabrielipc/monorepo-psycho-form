@@ -149,3 +149,103 @@ Al terminar, reportar los archivos modificados, las migraciones creadas y el res
 - Edición válida.
 - Colisión → 409.
 - Sin permiso → 403.
+
+---
+
+## B19. Descarga de reportes generados
+
+### Problema
+`ReportController` (`/reports`) solo expone `GET /reports`, `POST /reports/individual` y `POST /reports/aggregate`. Los tres devuelven el registro `ReporteGenerado`, con su `rutaAlmacenamiento`. No hay forma de descargar el archivo generado. El frontend ya tiene el helper de descarga (blob + `Content-Disposition`).
+
+### Cambios
+1. Agregar `GET /reports/{id}/file` con `@PreAuthorize(REPORTE_EXPORTAR)`.
+2. Devolver el binario con `Content-Type` correcto (PDF/CSV/XLSX según el formato) y `Content-Disposition: attachment; filename="<nombre>"`, con el nombre codificado para RFC 5987 si tiene caracteres no ASCII.
+3. Responder 404 si el registro no existe o el archivo ya no está en el almacenamiento.
+4. Validar que `rutaAlmacenamiento` quede dentro del directorio de reportes, para evitar path traversal.
+5. Si el proyecto ya audita descargas, registrar esta también.
+
+### Tests
+- Descarga válida con su nombre de archivo.
+- Archivo inexistente → 404.
+- Sin permiso → 403.
+- Ruta fuera del directorio → 404.
+
+---
+
+## B18. Reordenar posiciones ocupadas en `/test-versions/{id}/configuration`
+
+### Problema
+Las restricciones `UNIQUE` de orden (subtests por versión, ítems por subtest, opciones por ítem) son inmediatas. Un intercambio de posiciones entre registros existentes, por ejemplo A:1↔B:2, falla en `persistDraft*` en cuanto se actualiza el primero. Por eso hoy el builder bloquea esos intercambios y solo ofrece revertir el reordenamiento.
+
+### Cambios (elegir una opción)
+1. **Recomendada:** declarar esas restricciones `DEFERRABLE INITIALLY DEFERRED`. Requiere una migración nueva que haga drop y create de cada constraint. Así la unicidad se valida al commit de la transacción de `/configuration`.
+2. **Alternativa:** dentro de la misma transacción, mover primero a posiciones negativas o temporales los registros cuyo `order` cambia, y después asignar los definitivos.
+3. En ambos casos `validateConfigurationRequest` debe seguir rechazando con 400 los duplicados del estado FINAL.
+
+### Tests
+- Intercambiar dos subtests, dos ítems o dos opciones en un solo request → 200 y orden final correcto.
+- Una rotación de 3 elementos → 200.
+- Un duplicado en el estado final → 400.
+- Un fallo a mitad de la transacción → rollback completo, sin órdenes temporales persistidos.
+
+---
+
+## B20. Identidad verificable de imágenes subidas (ítems y opciones)
+
+### Problema
+Cuando el POST o PUT de una imagen falla sin respuesta clara (503, timeout o red), el builder recarga con `GET /subtests/{id}/clone-template`. Esa plantilla trae `resourceId`, `order`, `altText`, `storagePath` y `role`, pero ningún dato que pruebe que la imagen es la que envió esta pestaña: falta nombre original, tamaño, hash y autor. Si otro editor ocupó el mismo orden, el frontend no puede distinguir los dos casos y hoy abre un conflicto manual («no se pudo confirmar si la operación se aplicó»). Tampoco existe un listado con metadatos de las imágenes de opciones.
+
+### Cambios
+1. **Recomendada:** que el POST y el PUT de imágenes de ítem y de opción acepten un header `Idempotency-Key`, un UUID generado por el cliente. Guardarlo en el recurso (`clave_subida`) y exponerlo como `uploadKey` en `clone-template` (`SubtestCloneTemplateDTO.ImageTemplate`) y en `GET /items/{itemId}/images`. Repetir una petición con la misma clave debe devolver el recurso ya creado, sin duplicarlo.
+2. Exponer también `originalFileName`, `sizeBytes` y `sha256` del archivo en `ImageTemplate`, para ítems y opciones.
+3. Mantener la compatibilidad: los campos nuevos son opcionales en la respuesta.
+
+### Tests
+- POST con una `Idempotency-Key` repetida → el mismo `resourceId`, sin un segundo registro.
+- `clone-template` devuelve `uploadKey`, `originalFileName`, `sizeBytes` y `sha256` para imágenes de ítem y de opción.
+- PUT con clave → la clave nueva queda visible en `clone-template`.
+
+## B21. Lectura del estado final de una asignación completada
+
+### Problema
+Tras finalizar la evaluación, `GET /evaluacion-participante/yo` responde `409 ASIGNACION_NO_OPERABLE` (`ParticipantAccessService`, ~línea 108). Si el participante recarga, o si se corta la red justo al entregar, no puede confirmar que su entrega quedó registrada. El frontend usa hoy un marcador local en `sessionStorage`, que solo existe si la confirmación llegó a la pestaña.
+
+### Cambios
+1. Permitir `GET /yo` al participante autenticado de una asignación `COMPLETADO` y devolver el estado final (`attemptStatus: COMPLETADO`, subtests y fechas), solo lectura.
+2. Mantener `409 ASIGNACION_NO_OPERABLE` en todas las escrituras (respuestas, iniciar o finalizar subtest, finalizar evaluación).
+3. `ANULADO` y `EXPIRADO` siguen respondiendo 409 también en la lectura.
+
+### Tests
+- Asignación completada: `GET /yo` → 200 con `attemptStatus: COMPLETADO`; `PUT` de respuesta → 409.
+- Asignación anulada: `GET /yo` → 409.
+
+## B22. Calificación de claves de opción múltiple y numéricas
+
+### Problema
+`ClaveSimpleScoringService` (~líneas 141-145) solo puntúa si `clave.opcionCorrecta` está entre las opciones elegidas. No lee `expectedText` (p. ej. `A,B` en `OPCION_MULTIPLE`), `expectedNumber` ni `numericTolerance`, así que esas claves puntúan cero. El builder bloquea hoy su aprobación y su publicación con el problema `UNSUPPORTED_SCORING_KEY`, salvo que el ítem esté marcado para revisión manual.
+
+### Cambios
+1. `OPCION_MULTIPLE`: correcta si el conjunto de opciones seleccionadas es igual al conjunto de opciones correctas de la clave.
+2. `NUMERICA`: correcta si `|respuesta − expectedNumber| ≤ numericTolerance` (la tolerancia vale 0 si es nula).
+3. `TEXTO_ABIERTO` con `expectedText` y sin revisión manual: comparación normalizada (recorte, mayúsculas y sin acentos).
+
+### Tests
+- Uno por tipo: respuesta correcta → puntaje completo; respuesta incorrecta → 0.
+- `NUMERICA` en el borde de la tolerancia.
+
+Al implementarse, el frontend debe relajar `UNSUPPORTED_SCORING_KEY` en `bfa-digital/src/features/instruments/document/schema.ts`.
+
+## B23. Revisión manual: creación al calificar y aplicación del puntaje
+
+### Problema
+Al calificar, `ClaveSimpleScoringService` (~línea 157) cuenta los ítems con `requiereRevisionManual` como pendientes, pero no crea el registro de revisión. `ManualReviewService` (~línea 42) solo lista registros existentes, así que la bandeja queda vacía aunque el resultado diga «Requiere revisión». Además, resolver una revisión actualiza el registro sin recalcular el resultado oficial del intento.
+
+### Cambios
+1. Al calificar un intento, crear un registro de revisión `PENDIENTE` por cada respuesta de ítem con revisión manual, de forma idempotente si se recalifica.
+2. Al resolver una revisión, aplicar el puntaje al resultado del intento y recalcular el total, el puntaje por subtest y el baremo. Cuando no quedan pendientes, el resultado deja de marcarse «Requiere revisión».
+
+### Tests
+- Calificar un intento con 2 ítems de revisión manual → 2 registros pendientes; recalificar → siguen siendo 2.
+- Resolver ambas revisiones → el total del resultado incluye sus puntajes y el estado deja de ser «Requiere revisión».
+
+Al implementarse, el frontend debe quitar `PendingServerSupportNotice` de la bandeja y del detalle del resultado.

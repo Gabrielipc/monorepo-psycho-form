@@ -5,19 +5,15 @@ import { useStaffAuth } from "../../store/staffAuth";
 import { ApiError } from "../errors";
 import {
   assignRole,
-  createBackup,
   createUser,
-  downloadBackup,
   getPermissionMatrix,
   getRolePermissions,
   listAudit,
-  listBackups,
   listNotifications,
   listPermissions,
   listRoles,
   listUsers,
   removeRole,
-  requestRestore,
   search,
   setRolePermissions,
   setUserStatus,
@@ -25,7 +21,6 @@ import {
 import usersFixture from "../schemas/__fixtures__/admin/users.json";
 import permissionMatrixFixture from "../schemas/__fixtures__/admin/permission-matrix.json";
 import auditFixture from "../schemas/__fixtures__/admin/audit.json";
-import backupsFixture from "../schemas/__fixtures__/admin/backups.json";
 import rolesFixture from "../schemas/__fixtures__/admin/roles.json";
 import permissionsFixture from "../schemas/__fixtures__/admin/permissions.json";
 
@@ -93,54 +88,8 @@ describe("admin endpoints", () => {
     expect(seenEntity).toBe("revision_manual_respuesta");
     expect(logs).toHaveLength(2);
     expect(logs[0]?.username).toBe("admin");
+    expect(logs[0]?.createdAt).toBe("2026-10-01T10:00:00.000Z");
     expect(logs[1]?.username).toBeNull();
-  });
-
-  it("listBackups parses fixture and downloadBackup returns blob", async () => {
-    server.use(
-      http.get(`${API}/backups`, () =>
-        HttpResponse.json({
-          success: true,
-          data: [{ ...backupsFixture[0], extraBackupField: "ignored" }],
-        }),
-      ),
-      http.post(`${API}/backups`, () =>
-        HttpResponse.json({ success: true, data: backupsFixture[0] }),
-      ),
-      http.get(`${API}/backups/bfa-backup-20261001100500.json`, () =>
-        new HttpResponse('{"participants":5}', {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Disposition": 'attachment; filename="bfa-backup-20261001100500.json"',
-          },
-        }),
-      ),
-      http.post(`${API}/backups/bfa-backup-20261001100500.json/restore-requests`, () =>
-        HttpResponse.json({
-          success: true,
-          data: {
-            fileName: "bfa-backup-20261001100500.json",
-            auditId: 1003,
-            requestedAt: "2026-10-01T10:10:00",
-          },
-        }),
-      ),
-    );
-
-    const backups = await listBackups();
-    expect(backups[0]?.fileName).toBe("bfa-backup-20261001100500.json");
-    expect(backups[0]?.status).toBe("GENERADO");
-
-    const created = await createBackup();
-    expect(created.sizeBytes).toBe(2048);
-
-    const downloaded = await downloadBackup("bfa-backup-20261001100500.json");
-    expect(downloaded.fileName).toBe("bfa-backup-20261001100500.json");
-    expect(downloaded.blob).toBeInstanceOf(Blob);
-
-    const restore = await requestRestore("bfa-backup-20261001100500.json");
-    expect(restore.auditId).toBe(1003);
   });
 
   it("throws ApiError on envelope error and CONTRACT_MISMATCH on invalid data", async () => {
@@ -152,7 +101,7 @@ describe("admin endpoints", () => {
           error: { code: "FORBIDDEN", message: "Sin acceso" },
         }),
       ),
-      http.get(`${API}/backups`, () =>
+      http.get(`${API}/roles`, () =>
         HttpResponse.json({ success: true, data: [{ broken: true }] }),
       ),
     );
@@ -161,7 +110,7 @@ describe("admin endpoints", () => {
     expect(envErr).toBeInstanceOf(ApiError);
     expect((envErr as ApiError).code).toBe("FORBIDDEN");
 
-    const contractErr = await listBackups().catch((e: unknown) => e);
+    const contractErr = await listRoles().catch((e: unknown) => e);
     expect(contractErr).toBeInstanceOf(ApiError);
     expect((contractErr as ApiError).code).toBe("CONTRACT_MISMATCH");
   });
@@ -248,5 +197,18 @@ describe("admin endpoints", () => {
 
     const notifications = await listNotifications();
     expect(notifications[0]?.entityId).toBeNull();
+  });
+});
+
+describe("admin endpoints — sin funciones de respaldo duplicadas (sugerencia 6b)", () => {
+  it("los respaldos viven solo en endpoints/backups.ts", async () => {
+    const admin = (await import("./admin")) as Record<string, unknown>;
+    for (const name of ["listBackups", "createBackup", "downloadBackup", "requestRestore"]) {
+      expect(admin[name], name).toBeUndefined();
+    }
+    const backups = (await import("./backups")) as Record<string, unknown>;
+    for (const name of ["listBackups", "createBackup", "downloadBackup", "requestRestore"]) {
+      expect(typeof backups[name], name).toBe("function");
+    }
   });
 });

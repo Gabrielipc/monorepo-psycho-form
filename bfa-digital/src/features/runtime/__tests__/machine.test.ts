@@ -22,6 +22,7 @@ import {
   evaluationOf,
   isResumable,
   isSubtestOpenable,
+  isTimingReferenceValid,
   isTerminal,
   isValidOrdinal,
   nextPendingSubtest,
@@ -216,7 +217,7 @@ const MATRIX: readonly MatrixRow[] = [
   ["REQUEST_FINISH_SUBTEST", ev({ type: "REQUEST_FINISH_SUBTEST" }), ["respondiendo"]],
   ["FINISH_SUBTEST_OK(1)", ev({ type: "FINISH_SUBTEST_OK", subtestId: 1 }), ["finalizandoSubtest"]],
   ["FINISH_SUBTEST_FAILED(1)", ev({ type: "FINISH_SUBTEST_FAILED", subtestId: 1 }), ["finalizandoSubtest"]],
-  ["DEADLINE_REACHED", ev({ type: "DEADLINE_REACHED" }), ["respondiendo"]],
+  ["DEADLINE_REACHED", ev({ type: "DEADLINE_REACHED", clientNow: T0 + 600_000 }), ["respondiendo"]],
   ["REQUEST_FINISH_ATTEMPT", ev({ type: "REQUEST_FINISH_ATTEMPT" }), ["resumen"]],
   ["FINISH_ATTEMPT_OK", ev({ type: "FINISH_ATTEMPT_OK" }), ["finalizando"]],
   ["FINISH_ATTEMPT_FAILED", ev({ type: "FINISH_ATTEMPT_FAILED" }), ["finalizando"]],
@@ -681,7 +682,7 @@ describe("ordinal acotado a [1, totalItems]", () => {
 describe("cierre de subtest", () => {
   it("DEADLINE_REACHED en respondiendo → finalizandoSubtest(tiempo), conservando timing y subtest", () => {
     const state = respondiendo(3);
-    const next = expectKind(reduce(state, { type: "DEADLINE_REACHED" }), "finalizandoSubtest");
+    const next = expectKind(reduce(state, { type: "DEADLINE_REACHED", clientNow: T0 + 600_000 }), "finalizandoSubtest");
     expect(next.reason).toBe("tiempo");
     expect(next.subtestId).toBe(1);
     expect(next.totalItems).toBe(3);
@@ -691,7 +692,7 @@ describe("cierre de subtest", () => {
 
   it("DEADLINE_REACHED con el tiempo congelado por el servidor es inválido", () => {
     const state = respondiendo(2, cleanTiming({ paused: true }));
-    expect(reduce(state, { type: "DEADLINE_REACHED" })).toBe(state);
+    expect(reduce(state, { type: "DEADLINE_REACHED", clientNow: T0 + 600_000 })).toBe(state);
   });
 
   it("REQUEST_FINISH_SUBTEST → finalizandoSubtest(usuario)", () => {
@@ -702,7 +703,7 @@ describe("cierre de subtest", () => {
 
   it("DEADLINE_REACHED / REQUEST_FINISH_SUBTEST no se repiten en finalizandoSubtest", () => {
     const state = STATES.finalizandoSubtest;
-    expect(reduce(state, { type: "DEADLINE_REACHED" })).toBe(state);
+    expect(reduce(state, { type: "DEADLINE_REACHED", clientNow: T0 + 600_000 })).toBe(state);
     expect(reduce(state, { type: "REQUEST_FINISH_SUBTEST" })).toBe(state);
   });
 
@@ -755,7 +756,7 @@ describe("cierre de subtest", () => {
     expect(recovered.evaluation).toBe(start.evaluation);
 
     // Con reason === "tiempo" o subtestId distinto es inválido (no-op)
-    const timed = expectKind(reduce(start, { type: "DEADLINE_REACHED" }), "finalizandoSubtest");
+    const timed = expectKind(reduce(start, { type: "DEADLINE_REACHED", clientNow: T0 + 600_000 }), "finalizandoSubtest");
     expect(reduce(timed, { type: "FINISH_SUBTEST_FAILED", subtestId: 1 })).toBe(timed);
     expect(reduce(finishing, { type: "FINISH_SUBTEST_FAILED", subtestId: 99 })).toBe(finishing);
   });
@@ -807,9 +808,9 @@ describe("deadline y remainingMs", () => {
     }
   });
 
-  it("sin serverNow no se puede medir el desfase: receivedAt + remainingSeconds", () => {
+  it("sin serverNow no hay referencia válida: ni siquiera con remainingSeconds hay deadline (F2-FIX-2)", () => {
     const timing = buildTiming({ remainingSeconds: 60 }, 600, T0 + 7_000);
-    expect(timingDeadline(timing)).toBe(T0 + 7_000 + 60_000);
+    expect(timingDeadline(timing)).toBeNull();
   });
 
   it("sin remainingSeconds usa startedAt + timeLimitSeconds, corregido por el desfase", () => {
@@ -819,9 +820,10 @@ describe("deadline y remainingMs", () => {
     expect(timingRemainingMs(timing, T0 + 50_000)).toBe(500_000);
   });
 
-  it("sin remainingSeconds ni serverNow: startedAt + timeLimitSeconds sin corrección", () => {
+  it("sin remainingSeconds ni serverNow no hay referencia monotónica: no hay deadline (nunca se mezcla con la hora de pared)", () => {
     const timing = buildTiming({ startedAt: iso(T0) }, 600, T0 + 10_000);
-    expect(timingDeadline(timing)).toBe(T0 + 600_000);
+    expect(timingDeadline(timing)).toBeNull();
+    expect(timingRemainingMs(timing, T0 + 99_999_999)).toBeNull();
   });
 
   it("remainingSeconds tiene prioridad sobre startedAt + límite", () => {
@@ -839,7 +841,7 @@ describe("deadline y remainingMs", () => {
     const timing = buildTiming({ startedAt: "no-es-fecha", serverNow: "tampoco" }, 600, T0);
     expect(timingDeadline(timing)).toBeNull();
     const withRemaining = buildTiming({ remainingSeconds: 10, serverNow: "tampoco" }, 600, T0);
-    expect(timingDeadline(withRemaining)).toBe(T0 + 10_000);
+    expect(timingDeadline(withRemaining)).toBeNull();
   });
 
   it("remainingMs nunca es negativo", () => {
@@ -877,7 +879,7 @@ describe("deadline y remainingMs", () => {
     const next = reduce(STATES.instrucciones, {
       type: "START_SUBTEST_OK",
       subtestId: 1,
-      timing: { startedAt: iso(T0) },
+      timing: { startedAt: iso(T0), serverNow: iso(T0) },
       timeLimitSeconds: 120,
       clientNow: T0,
     });
@@ -1015,7 +1017,7 @@ describe("pausa y reanudación (tiempo congelado)", () => {
       { type: "PREV" },
       { type: "GO_TO_ITEM", ordinal: 1 },
       { type: "REQUEST_FINISH_SUBTEST" },
-      { type: "DEADLINE_REACHED" },
+      { type: "DEADLINE_REACHED", clientNow: T0 + 600_000 },
       { type: "FINISH_SUBTEST_OK", subtestId: 1 },
       { type: "OPEN_SUBTEST", subtestId: 1 },
     ] as const) {
@@ -1135,6 +1137,32 @@ describe("SERVER_ERROR: todos los códigos", () => {
       "ASIGNACION_NO_OPERABLE",
     ];
     expect([...covered].sort()).toEqual([...RUNTIME_ERROR_CODES].sort());
+  });
+
+  it("ASIGNACION_NO_OPERABLE con delivered=true bloquea como evaluacionEntregada", () => {
+    const next = expectKind(
+      reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "ASIGNACION_NO_OPERABLE", clientNow: T0, delivered: true }),
+      "bloqueado",
+    );
+    expect(next.reason).toBe("evaluacionEntregada");
+  });
+
+  it("SESION_FINALIZADA con delivered=true bloquea como evaluacionEntregada; sin él, sesionCerrada", () => {
+    const next = expectKind(
+      reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "SESION_FINALIZADA", clientNow: T0, delivered: true }),
+      "bloqueado",
+    );
+    expect(next.reason).toBe("evaluacionEntregada");
+    const plain = expectKind(reduce(STATES.listaSubtests, err("SESION_FINALIZADA")), "bloqueado");
+    expect(plain.reason).toBe("sesionCerrada");
+  });
+
+  it("delivered=true no altera otros códigos de bloqueo", () => {
+    const next = expectKind(
+      reduce(STATES.listaSubtests, { type: "SERVER_ERROR", code: "TOKEN_EXPIRADO", clientNow: T0, delivered: true }),
+      "bloqueado",
+    );
+    expect(next.reason).toBe("expirado");
   });
 
   const blockingCodes: ReadonlyArray<[RuntimeErrorCode, BlockReason]> = [
@@ -1292,5 +1320,160 @@ describe("selectores", () => {
     expect(currentOrdinal(STATES.respondiendo)).toBe(2);
     expect(currentOrdinal(STATES.pausada)).toBe(2);
     expect(currentOrdinal(STATES.instrucciones)).toBeNull();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// F2-FIX-1 · ALTO 3: reloj monotónico (clientNow = performance.now(), nunca Date.now())
+// ---------------------------------------------------------------------------
+
+describe("F2-FIX-1 ALTO 3 · tiempo con reloj monotónico", () => {
+  // `clientNow` es una lectura monotónica (p. ej. performance.now()): valores pequeños, sin relación con Date.now().
+  const MONO0 = 5_000;
+
+  it("remaining = remainingSeconds*1000 − (monotónico − T0), con cualquier escala del reloj de pared del servidor", () => {
+    const timing = buildTiming({ remainingSeconds: 50, serverNow: "2026-11-25T10:00:00.000Z" }, 600, MONO0);
+    expect(timingDeadline(timing)).toBe(MONO0 + 50_000);
+    expect(timingRemainingMs(timing, MONO0)).toBe(50_000);
+    expect(timingRemainingMs(timing, MONO0 + 20_000)).toBe(30_000);
+  });
+
+  it("DEADLINE_REACHED con tiempo restante > 0 se ignora (la máquina verifica el instante monotónico)", () => {
+    const state = respondiendo(1, buildTiming({ remainingSeconds: 50, serverNow: iso(T0) }, 600, MONO0));
+    const onInvalid = vi.fn();
+    expect(reduce(state, { type: "DEADLINE_REACHED", clientNow: MONO0 + 10_000 }, { onInvalid })).toBe(state);
+    expect(onInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("DEADLINE_REACHED con el tiempo agotado según el reloj monotónico finaliza por tiempo", () => {
+    const state = respondiendo(1, buildTiming({ remainingSeconds: 50, serverNow: iso(T0) }, 600, MONO0));
+    const next = expectKind(reduce(state, { type: "DEADLINE_REACHED", clientNow: MONO0 + 50_000 }), "finalizandoSubtest");
+    expect(next.reason).toBe("tiempo");
+  });
+
+  it("DEADLINE_REACHED sin referencia válida (reloj hacia atrás o sin deadline) se ignora", () => {
+    const state = respondiendo(1, buildTiming({ remainingSeconds: 0, serverNow: iso(T0) }, 600, MONO0));
+    expect(reduce(state, { type: "DEADLINE_REACHED", clientNow: MONO0 - 1 })).toBe(state);
+    const noReference = respondiendo(1, buildTiming({ startedAt: iso(T0) }, 600, MONO0));
+    expect(reduce(noReference, { type: "DEADLINE_REACHED", clientNow: MONO0 + 9_999_999 })).toBe(noReference);
+  });
+
+  it("isTimingReferenceValid exige T0 finito y un reloj que no retroceda", () => {
+    const timing = buildTiming({ remainingSeconds: 10, serverNow: iso(T0) }, 600, MONO0);
+    expect(isTimingReferenceValid(timing, MONO0)).toBe(true);
+    expect(isTimingReferenceValid(timing, MONO0 + 1)).toBe(true);
+    expect(isTimingReferenceValid(timing, MONO0 - 1)).toBe(false);
+    expect(isTimingReferenceValid(timing, Number.NaN)).toBe(false);
+    expect(isTimingReferenceValid({ ...timing, receivedAt: Number.NaN }, MONO0)).toBe(false);
+  });
+
+  it("un /yo posterior re-ancla la referencia: el restante vuelve a ser el que dijo el servidor", () => {
+    const state = respondiendo(1, buildTiming({ remainingSeconds: 50, serverNow: iso(T0) }, 600, MONO0));
+    const evaluation = makeEvaluation({
+      subtests: [
+        makeSubtest(1, 1, "EN_PROGRESO", { timing: { remainingSeconds: 200, serverNow: iso(T0 + 60_000), startedAt: iso(T0 - 10_000) } }),
+        makeSubtest(2, 2),
+        makeSubtest(3, 3),
+      ],
+    });
+    const next = expectKind(reduce(state, loaded(evaluation, MONO0 + 40_000)), "respondiendo");
+    expect(remainingMs(next, MONO0 + 40_000)).toBe(200_000);
+    expect(remainingMs(next, MONO0 + 60_000)).toBe(180_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2-FIX-1 · MEDIO 4: el servidor cerró el subtest mientras se finalizaba
+// ---------------------------------------------------------------------------
+
+describe("F2-FIX-1 MEDIO 4 · finalizandoSubtest con el subtest ya cerrado por el servidor", () => {
+  const withSubtest1 = (status: AttemptStatus, others: AttemptStatus = "NO_INICIADO"): Evaluation =>
+    makeEvaluation({
+      subtests: [makeSubtest(1, 1, status), makeSubtest(2, 2, others), makeSubtest(3, 3, others)],
+    });
+
+  it.each<AttemptStatus>(["COMPLETADO", "ANULADO"])(
+    "EVALUATION_LOADED con el subtest %s avanza a listaSubtests en vez de quedarse en finalizandoSubtest",
+    (status) => {
+      for (const reason of ["usuario", "tiempo"] as const) {
+        const state = { ...STATES.finalizandoSubtest, reason } as RunnerState;
+        const next = expectKind(reduce(state, loaded(withSubtest1(status))), "listaSubtests");
+        expect(next.evaluation.subtests[0]?.status).toBe(status);
+      }
+    },
+  );
+
+  it("si era el último subtest abierto va a resumen", () => {
+    const next = reduce(STATES.finalizandoSubtest, loaded(withSubtest1("COMPLETADO", "COMPLETADO")));
+    expectKind(next, "resumen");
+  });
+
+  it("con el subtest todavía EN_PROGRESO sigue en finalizandoSubtest y refresca la evaluación", () => {
+    const next = expectKind(reduce(STATES.finalizandoSubtest, loaded(withSubtest1("EN_PROGRESO"))), "finalizandoSubtest");
+    expect(next.reason).toBe("usuario");
+  });
+
+  it("también avanza si la sesión está pausada cuando el servidor lo cerró", () => {
+    const paused = pausada(STATES.finalizandoSubtest as ResumableState, 100_000);
+    const next = reduce(paused, loaded(withSubtest1("COMPLETADO")));
+    expect(["listaSubtests", "pausada"]).toContain(next.kind);
+    if (next.kind === "pausada") expectKind(next.resumeTo as RunnerState, "listaSubtests");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F2-FIX-2 · ALTO 1: sin referencia válida del servidor no hay deadline local
+// ---------------------------------------------------------------------------
+
+describe("F2-FIX-2 ALTO 1 · deadline local solo con referencia válida", () => {
+  const MONO0 = 5_000;
+
+  it("remainingSeconds SIN serverNow no produce deadline local (ni restante)", () => {
+    const timing = buildTiming({ remainingSeconds: 5 }, 600, MONO0);
+    expect(timingDeadline(timing)).toBeNull();
+    expect(timingRemainingMs(timing, MONO0 + 60_000)).toBeNull();
+    expect(deadline(respondiendo(1, timing))).toBeNull();
+    expect(remainingMs(respondiendo(1, timing), MONO0 + 60_000)).toBeNull();
+  });
+
+  it("remainingSeconds con serverNow inválido o vacío tampoco produce deadline", () => {
+    expect(timingDeadline(buildTiming({ remainingSeconds: 5, serverNow: "no-es-una-fecha" }, 600, MONO0))).toBeNull();
+    expect(timingDeadline(buildTiming({ remainingSeconds: 5, serverNow: "" }, 600, MONO0))).toBeNull();
+  });
+
+  it("remainingSeconds con serverNow válido pero sin referencia monotónica (receivedAt no finito) no produce deadline", () => {
+    const timing = buildTiming({ remainingSeconds: 5, serverNow: iso(T0) }, 600, Number.NaN);
+    expect(timingDeadline(timing)).toBeNull();
+  });
+
+  it("con serverNow válido y T0 finito el deadline sigue siendo T0 + remainingSeconds", () => {
+    expect(timingDeadline(buildTiming({ remainingSeconds: 5, serverNow: iso(T0) }, 600, MONO0))).toBe(MONO0 + 5_000);
+  });
+
+  it("DEADLINE_REACHED con el tiempo 'agotado' pero sin serverNow se ignora (no hay referencia)", () => {
+    const state = respondiendo(1, buildTiming({ remainingSeconds: 5 }, 600, MONO0));
+    const onInvalid = vi.fn();
+    expect(reduce(state, { type: "DEADLINE_REACHED", clientNow: MONO0 + 60_000 }, { onInvalid })).toBe(state);
+    expect(onInvalid).toHaveBeenCalledTimes(1);
+  });
+
+  it("DEADLINE_REACHED sin clientNow (evento mal formado en tiempo de ejecución) se ignora aunque el restante sea 0", () => {
+    const state = respondiendo(1, buildTiming({ remainingSeconds: 0, serverNow: iso(T0) }, 600, MONO0));
+    const malformed = { type: "DEADLINE_REACHED" } as unknown as RunnerEvent;
+    expect(reduce(state, malformed)).toBe(state);
+  });
+
+  it("tras pausa y reanudación con referencia previa válida el deadline sigue existiendo (rebasado al clientNow)", () => {
+    const paused = reduce(respondiendo(1, buildTiming({ remainingSeconds: 50, serverNow: iso(T0) }, 600, MONO0)), {
+      type: "SESSION_STATUS_CHANGED",
+      status: "PAUSADA",
+      clientNow: MONO0 + 10_000,
+    });
+    const resumed = expectKind(
+      reduce(paused, { type: "SESSION_STATUS_CHANGED", status: "ABIERTA", clientNow: MONO0 + 100_000 }),
+      "respondiendo",
+    );
+    expect(timingDeadline(resumed.timing)).toBe(MONO0 + 100_000 + 40_000);
   });
 });

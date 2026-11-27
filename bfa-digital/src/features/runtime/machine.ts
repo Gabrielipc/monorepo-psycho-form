@@ -11,8 +11,12 @@ import type {
  * Máquina de estados pura del runner del participante (R-01).
  *
  * Reducer sin efectos: sin React, sin fetch, sin stores y sin relojes. Todo instante que
- * necesita la máquina (`clientNow`, epoch ms del reloj del navegador) viaja DENTRO del evento,
- * de modo que el mismo evento sobre el mismo estado siempre da el mismo resultado.
+ * necesita la máquina (`clientNow`) viaja DENTRO del evento, de modo que el mismo evento sobre el
+ * mismo estado siempre da el mismo resultado.
+ *
+ * `clientNow` es un instante MONOTÓNICO del cliente (`performance.now()`, en ms), NUNCA `Date.now()`:
+ * el tiempo transcurrido desde la última referencia del servidor se mide con un reloj que no se
+ * mueve si el usuario cambia la hora del equipo (un salto de +1 h no puede cerrar un subtest).
  *
  * Flujo feliz:
  *   validando → bienvenida → listaSubtests → instrucciones(s) → respondiendo(s, i)
@@ -36,9 +40,12 @@ import type {
  *
  * Tiempo:
  *   El servidor es la autoridad. El snapshot de tiempo (`SubtestTiming`) guarda lo que dijo el
- *   servidor (`remainingSeconds`, `serverNow`, `startedAt`) y el instante local de recepción
- *   (`receivedAt`). `deadline` = `serverNow + remainingSeconds`, corregido por el desfase de
- *   reloj `receivedAt − serverNow`, o `startedAt + timeLimitSeconds` si no hay `remainingSeconds`.
+ *   servidor (`remainingSeconds`, `serverNow`, `startedAt`) y el instante monotónico de recepción
+ *   (`receivedAt`, T0). `remaining = remainingSeconds*1000 − (clientNow − T0)`; la referencia es el
+ *   par (servidor dijo X restantes) + (T0 monotónico). Sin `remainingSeconds` se deriva
+ *   `startedAt + timeLimitSeconds − serverNow` (solo diferencias de relojes del servidor). Sin
+ *   `serverNow` válido o sin T0 monotónico finito no hay referencia: no hay deadline local (null),
+ *   ni siquiera con `remainingSeconds`.
  *   Mientras la sesión está pausada el tiempo no avanza (`remainingMs` devuelve el valor congelado).
  */
 
@@ -60,7 +67,7 @@ export interface SubtestTiming {
   readonly serverNow: string | null;
   /** El servidor reportó el subtest como pausado (tiempo congelado). */
   readonly paused: boolean;
-  /** Epoch ms del reloj del cliente cuando se recibió el snapshot. */
+  /** Instante MONOTÓNICO del cliente (`performance.now()`, ms) cuando se recibió el snapshot (T0). */
   readonly receivedAt: number;
 }
 
@@ -74,7 +81,9 @@ export type BlockReason =
   | "sesionNoAbierta"
   | "accesoRevocado"
   | "expirado"
-  | "asignacionNoOperable";
+  | "asignacionNoOperable"
+  /** 409 ASIGNACION_NO_OPERABLE con marcador local de entrega confirmada por el servidor. */
+  | "evaluacionEntregada";
 
 export type FinishReason = "usuario" | "tiempo";
 
@@ -178,6 +187,7 @@ export const INITIAL_STATE: RunnerState = { kind: "validando" };
 export type RunnerEvent =
   /** `/evaluacion-participante/yo` cargado (primera carga o refetch/polling). Re-sincroniza la máquina. */
   | { readonly type: "EVALUATION_LOADED"; readonly evaluation: Evaluation; readonly clientNow: number }
+  // `clientNow` de todos los eventos: instante monotónico (`performance.now()`), no hora de pared.
   /** `iniciar` intento respondió OK. Solo desde `bienvenida`. */
   | { readonly type: "START_ATTEMPT_OK"; readonly attemptId: number }
   /** El participante abre un subtest desde la lista. */
@@ -206,8 +216,12 @@ export type RunnerEvent =
   | { readonly type: "FINISH_SUBTEST_OK"; readonly subtestId: number }
   /** Fallo recuperable al finalizar subtest iniciado por el usuario (vuelve a `respondiendo`). */
   | { readonly type: "FINISH_SUBTEST_FAILED"; readonly subtestId: number }
-  /** El cronómetro local llegó al deadline. */
-  | { readonly type: "DEADLINE_REACHED" }
+  /**
+   * El cronómetro local llegó al deadline. `clientNow` (instante monotónico) es OBLIGATORIO y la máquina lo
+   * VERIFICA siempre: con tiempo restante > 0, sin referencia válida (serverNow + T0 monotónico) o con un
+   * `clientNow` no finito el evento se ignora.
+   */
+  | { readonly type: "DEADLINE_REACHED"; readonly clientNow: number }
   /** Desde `resumen`: el participante confirma el envío final. */
   | { readonly type: "REQUEST_FINISH_ATTEMPT" }
   | { readonly type: "FINISH_ATTEMPT_OK" }
@@ -216,7 +230,13 @@ export type RunnerEvent =
   /** Cambio de estado de la sesión detectado por el cliente (p. ej. polling ligero). */
   | { readonly type: "SESSION_STATUS_CHANGED"; readonly status: SessionStatus; readonly clientNow: number }
   /** 409 de bloqueo del backend (`isRuntimeBlocked`). */
-  | { readonly type: "SERVER_ERROR"; readonly code: RuntimeErrorCode; readonly clientNow: number }
+  | {
+      readonly type: "SERVER_ERROR";
+      readonly code: RuntimeErrorCode;
+      readonly clientNow: number;
+      /** Solo con ASIGNACION_NO_OPERABLE o SESION_FINALIZADA: existe el marcador local de que el finalizar fue confirmado. */
+      readonly delivered?: boolean;
+    }
   /** El acceso fue revocado (401/403 de la audiencia participante). */
   | { readonly type: "ACCESS_REVOKED" };
 
@@ -319,22 +339,35 @@ export function buildTiming(
 }
 
 /**
- * Instante absoluto (epoch ms, reloj del CLIENTE) en que vence el subtest, o null si no hay límite.
- * - Con `remainingSeconds`: `serverNow + remaining`, más el desfase `receivedAt − serverNow`.
- *   Sin `serverNow` válido el desfase no se puede medir y se usa `receivedAt + remaining`.
- * - Sin `remainingSeconds`: `startedAt + timeLimitSeconds` (+ desfase si hay `serverNow`).
+ * Instante (en la escala monotónica del cliente) en que vence el subtest, o null si no hay límite
+ * o no hay una referencia válida. La referencia exige AMBAS cosas: un T0 monotónico finito (`receivedAt`)
+ * y un `serverNow` válido (el snapshot nació de una respuesta fresca del servidor). Sin ellas no hay
+ * deadline local: el cierre por tiempo queda en manos del servidor hasta el próximo /yo.
+ * - Con `remainingSeconds`: `receivedAt + remainingSeconds*1000` (T0 + lo que dijo el servidor).
+ * - Sin `remainingSeconds`: `receivedAt + (startedAt + timeLimitSeconds − serverNow)`; solo usa
+ *   diferencias entre fechas del servidor (jamás se compara una fecha absoluta con `clientNow`).
  */
 export function timingDeadline(timing: SubtestTiming): number | null {
+  if (!Number.isFinite(timing.receivedAt)) return null;
   const serverNowMs = parseMs(timing.serverNow);
-  const offset = serverNowMs === null ? 0 : timing.receivedAt - serverNowMs;
+  if (serverNowMs === null) return null;
   if (timing.remainingSeconds !== null) {
-    return (serverNowMs ?? timing.receivedAt) + timing.remainingSeconds * 1000 + offset;
+    return Number.isFinite(timing.remainingSeconds) ? timing.receivedAt + timing.remainingSeconds * 1000 : null;
   }
   const startedAtMs = parseMs(timing.startedAt);
   if (timing.timeLimitSeconds !== null && startedAtMs !== null) {
-    return startedAtMs + timing.timeLimitSeconds * 1000 + offset;
+    return timing.receivedAt + (startedAtMs + timing.timeLimitSeconds * 1000 - serverNowMs);
   }
   return null;
+}
+
+/**
+ * ¿La referencia monotónica del snapshot es utilizable en `clientNow`? Exige un T0 finito y un reloj que
+ * no vaya hacia atrás respecto de T0. Si no se cumple, el runner NO debe cerrar por deadline: primero
+ * refresca `/yo`.
+ */
+export function isTimingReferenceValid(timing: SubtestTiming, clientNow: number): boolean {
+  return Number.isFinite(timing.receivedAt) && Number.isFinite(clientNow) && clientNow >= timing.receivedAt;
 }
 
 /** Milisegundos restantes (≥ 0) en `clientNow`. Un snapshot pausado no avanza. Null sin límite. */
@@ -497,6 +530,8 @@ function refreshPhase(phase: ResumableState, evaluation: Evaluation, clientNow: 
     }
     case "finalizandoSubtest": {
       const subtest = findSubtest(evaluation, phase.subtestId);
+      // El servidor ya cerró (o anuló) el subtest mientras se finalizaba: no esperar más al cierre local.
+      if (subtest && isSubtestDone(subtest)) return afterSubtests(evaluation);
       return { ...phase, evaluation, timing: freshTiming(subtest, clientNow) ?? phase.timing };
     }
   }
@@ -523,7 +558,8 @@ function resume(paused: PausadaState, clientNow: number): ResumableState {
       : {
           ...phase.timing,
           remainingSeconds: paused.frozenRemainingMs / 1000,
-          serverNow: null,
+          // `serverNow` se conserva: solo certifica que el snapshot nació de un /yo del servidor (el cálculo usa
+          // remainingSeconds + el T0 rebasado). Sin él no habría deadline local hasta el próximo /yo.
           paused: false,
           receivedAt: clientNow,
         };
@@ -572,7 +608,12 @@ function onEvaluationLoaded(
   return sessionPaused ? pause(refreshed, clientNow, evaluation.pausedAt ?? null) : refreshed;
 }
 
-function onServerError(state: RunnerState, code: RuntimeErrorCode, clientNow: number): RunnerState | null {
+function onServerError(
+  state: RunnerState,
+  code: RuntimeErrorCode,
+  clientNow: number,
+  delivered = false,
+): RunnerState | null {
   switch (code) {
     case "SESION_PAUSADA":
       return isResumable(state) ? pause(state, clientNow, null) : null;
@@ -581,11 +622,11 @@ function onServerError(state: RunnerState, code: RuntimeErrorCode, clientNow: nu
     case "SESION_NO_ABIERTA":
       return blocked(state, "sesionNoAbierta");
     case "SESION_FINALIZADA":
-      return blocked(state, "sesionCerrada");
+      return blocked(state, delivered ? "evaluacionEntregada" : "sesionCerrada");
     case "TOKEN_EXPIRADO":
       return blocked(state, "expirado");
     case "ASIGNACION_NO_OPERABLE":
-      return blocked(state, "asignacionNoOperable");
+      return blocked(state, delivered ? "evaluacionEntregada" : "asignacionNoOperable");
     default:
       return assertNever(code);
   }
@@ -692,9 +733,14 @@ function transition(state: RunnerState, event: RunnerEvent): RunnerState | null 
       if (state.kind !== "respondiendo") return null;
       return { ...toFinishingByTime(state), reason: "usuario" };
 
-    case "DEADLINE_REACHED":
+    case "DEADLINE_REACHED": {
       if (state.kind !== "respondiendo" || state.timing.paused) return null;
+      // `clientNow` obligatorio: sin un instante monotónico finito la máquina no puede verificar el vencimiento.
+      if (typeof event.clientNow !== "number" || !Number.isFinite(event.clientNow)) return null;
+      const rem = timingRemainingMs(state.timing, event.clientNow);
+      if (rem === null || rem > 0 || !isTimingReferenceValid(state.timing, event.clientNow)) return null;
       return toFinishingByTime(state);
+    }
 
     case "FINISH_SUBTEST_OK": {
       if (state.kind !== "finalizandoSubtest" || state.subtestId !== event.subtestId) return null;
@@ -739,7 +785,7 @@ function transition(state: RunnerState, event: RunnerEvent): RunnerState | null 
       return onSessionStatusChanged(state, event.status, event.clientNow);
 
     case "SERVER_ERROR":
-      return onServerError(state, event.code, event.clientNow);
+      return onServerError(state, event.code, event.clientNow, event.delivered === true);
 
     case "ACCESS_REVOKED":
       return blocked(state, "accesoRevocado");

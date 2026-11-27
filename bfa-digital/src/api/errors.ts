@@ -19,8 +19,22 @@ interface ApiErrorInit {
   message: string;
   details?: string[];
   correlationId?: string;
-  response?: AxiosResponse;
+  /** Causa original; se SANEA (solo name/message/code) antes de retenerla. Nunca se conserva tal cual. */
   cause?: unknown;
+}
+
+/**
+ * Reduce una causa a un `Error` plano con `name`, `message` y (si es string) `code`. Un `AxiosError`
+ * arrastra `config` (con `Authorization: Bearer <JWT>` y el body enviado), `request` y `response`:
+ * nada de eso debe sobrevivir en un `ApiError`, que acaba en estados de mutación, caché y consola.
+ */
+function sanitizeCause(cause: unknown): Error | undefined {
+  if (!(cause instanceof Error)) return undefined;
+  const plain = new Error(cause.message);
+  plain.name = cause.name;
+  const code = (cause as { code?: unknown }).code;
+  if (typeof code === "string") Object.defineProperty(plain, "code", { value: code, enumerable: true });
+  return plain;
 }
 
 /**
@@ -34,21 +48,38 @@ export class ApiError extends Error {
   readonly code: string;
   readonly details?: string[];
   readonly correlationId?: string;
-  /**
-   * @deprecated Compatibilidad con el código legacy que lee `error.response?.data` /
-   * `error.response?.status`. El código nuevo debe usar `status`, `code` y `details`.
-   */
-  readonly response?: AxiosResponse;
 
   constructor(init: ApiErrorInit) {
-    super(init.message, init.cause === undefined ? undefined : { cause: init.cause });
+    const cause = sanitizeCause(init.cause);
+    super(init.message, cause === undefined ? undefined : { cause });
     this.name = "ApiError";
     this.status = init.status;
     this.code = init.code;
     this.details = init.details;
     this.correlationId = init.correlationId;
-    this.response = init.response;
   }
+}
+
+/**
+ * Descripción de un error APTA PARA LOGS (`console.error`/`warn`): solo campos seguros. Nunca pasar el error
+ * completo al console: un `AxiosError` crudo lleva `config.headers.Authorization` y el body enviado.
+ */
+export function safeErrorLog(error: unknown): Record<string, unknown> {
+  if (error instanceof ApiError) {
+    return {
+      name: error.name,
+      status: error.status,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      correlationId: error.correlationId,
+    };
+  }
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    return { name: error.name, message: error.message, ...(typeof code === "string" ? { code } : {}) };
+  }
+  return { type: typeof error };
 }
 
 const DEFAULT_MESSAGES: Record<number, string> = {
@@ -104,7 +135,6 @@ export function toApiError(error: unknown): ApiError {
         message: env.message ?? defaultMessageFor(response.status),
         details: env.details,
         correlationId: env.correlationId,
-        response,
         cause: error,
       });
     }

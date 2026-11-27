@@ -43,7 +43,7 @@ describe("OpenText", () => {
     expect(screen.getByText(`4 / ${OPEN_TEXT_MAX_LENGTH}`)).toBeInTheDocument();
   });
 
-  it("actualiza el textarea inmediatamente pero aplica debounce de 300 ms a onChange", () => {
+  it("emite onChange AL INSTANTE en cada cambio (sin debounce ni texto pendiente en el renderer)", () => {
     const onChange = vi.fn();
 
     render(
@@ -59,36 +59,26 @@ describe("OpenText", () => {
     fireEvent.change(textarea, { target: { value: "Prim" } });
     expect(textarea).toHaveValue("Prim");
     expect(screen.getByText(`4 / ${OPEN_TEXT_MAX_LENGTH}`)).toBeInTheDocument();
-    expect(onChange).not.toHaveBeenCalled();
-
-    act(() => {
-      vi.advanceTimersByTime(200);
-    });
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "TEXTO_ABIERTO", text: "Prim" });
 
     fireEvent.change(textarea, { target: { value: "Primera respuesta" } });
     expect(textarea).toHaveValue("Primera respuesta");
     expect(screen.getByText(`17 / ${OPEN_TEXT_MAX_LENGTH}`)).toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "TEXTO_ABIERTO", text: "Primera respuesta" });
 
+    // No hay timers ni emisiones diferidas.
     act(() => {
-      vi.advanceTimersByTime(299);
+      vi.advanceTimersByTime(1_000);
     });
-    expect(onChange).not.toHaveBeenCalled();
-
-    act(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith({
-      kind: "TEXTO_ABIERTO",
-      text: "Primera respuesta",
-    });
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
-  it("emite el último valor pendiente al hacer blur sin duplicar después del timer", () => {
+  it("blur y desmontar no emiten nada extra: no queda texto pendiente que pueda irse a otro ítem", () => {
     const onChange = vi.fn();
 
-    render(
+    const { unmount } = render(
       <OpenText
         item={makeItem()}
         value={{ kind: "TEXTO_ABIERTO", text: "" }}
@@ -97,79 +87,46 @@ describe("OpenText", () => {
     );
 
     const textarea = screen.getByLabelText("Describe el patrón observado en la secuencia.");
-    fireEvent.change(textarea, { target: { value: "Valor en blur" } });
-
-    act(() => {
-      vi.advanceTimersByTime(100);
-    });
-    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(textarea, { target: { value: "Valor" } });
+    expect(onChange).toHaveBeenCalledTimes(1);
 
     fireEvent.blur(textarea);
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith({
-      kind: "TEXTO_ABIERTO",
-      text: "Valor en blur",
-    });
-
+    unmount();
     act(() => {
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(1_000);
     });
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
-  it("emite el último valor pendiente al desmontar (flush) sin duplicar si ya se emitió", () => {
-    const onChange = vi.fn();
+  it("F2-FIX-1 ALTO 2 · cambiar de ítem sin blur no reasigna el texto escrito al ítem nuevo", () => {
+    const onChangeItem1 = vi.fn();
+    const onChangeItem2 = vi.fn();
+    const item1 = makeItem({ id: 101 });
+    const item2 = makeItem({ id: 102, prompt: "Segundo ítem abierto" });
 
-    const { unmount } = render(
-      <OpenText
-        item={makeItem()}
-        value={{ kind: "TEXTO_ABIERTO", text: "" }}
-        onChange={onChange}
-      />,
+    const { rerender } = render(
+      <OpenText item={item1} value={{ kind: "TEXTO_ABIERTO", text: "" }} onChange={onChangeItem1} />,
     );
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "texto del ítem 1" } });
+    expect(onChangeItem1).toHaveBeenCalledWith({ kind: "TEXTO_ABIERTO", text: "texto del ítem 1" });
 
-    const textarea = screen.getByLabelText("Describe el patrón observado en la secuencia.");
-    fireEvent.change(textarea, { target: { value: "Pendiente al desmontar" } });
-
-    act(() => {
-      vi.advanceTimersByTime(50);
-    });
-    expect(onChange).not.toHaveBeenCalled();
-
-    unmount();
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith({
-      kind: "TEXTO_ABIERTO",
-      text: "Pendiente al desmontar",
-    });
+    // Se cambia de ítem (mismo renderer, otro `item`) sin blur ni espera.
+    rerender(<OpenText item={item2} value={{ kind: "TEXTO_ABIERTO", text: "" }} onChange={onChangeItem2} />);
+    expect(screen.getByRole("textbox")).toHaveValue("");
 
     act(() => {
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(1_000);
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChangeItem2).not.toHaveBeenCalled(); // el texto del ítem 1 no llega al 2
+    expect(onChangeItem1).toHaveBeenCalledTimes(1);
   });
 
-  it("no vuelve a emitir al desmontar si el debounce ya había expirado", () => {
-    const onChange = vi.fn();
-
-    const { unmount } = render(
-      <OpenText
-        item={makeItem()}
-        value={{ kind: "TEXTO_ABIERTO", text: "" }}
-        onChange={onChange}
-      />,
+  it("adopta un cambio externo del valor (restauración) cuando el padre lo actualiza", () => {
+    const { rerender } = render(
+      <OpenText item={makeItem()} value={{ kind: "TEXTO_ABIERTO", text: "uno" }} onChange={vi.fn()} />,
     );
-
-    const textarea = screen.getByLabelText("Describe el patrón observado en la secuencia.");
-    fireEvent.change(textarea, { target: { value: "Ya guardado" } });
-
-    act(() => {
-      vi.advanceTimersByTime(300);
-    });
-    expect(onChange).toHaveBeenCalledTimes(1);
-
-    unmount();
-    expect(onChange).toHaveBeenCalledTimes(1);
+    rerender(<OpenText item={makeItem()} value={{ kind: "TEXTO_ABIERTO", text: "restaurado" }} onChange={vi.fn()} />);
+    expect(screen.getByRole("textbox")).toHaveValue("restaurado");
   });
 
   it("respeta el límite OPEN_TEXT_MAX_LENGTH (4000), actualiza el contador y conserva espacios", () => {
@@ -193,9 +150,6 @@ describe("OpenText", () => {
     expect(textarea).toHaveValue(expected);
     expect(screen.getByText(`${OPEN_TEXT_MAX_LENGTH} / ${OPEN_TEXT_MAX_LENGTH}`)).toBeInTheDocument();
 
-    act(() => {
-      vi.advanceTimersByTime(300);
-    });
     expect(onChange).toHaveBeenCalledWith({
       kind: "TEXTO_ABIERTO",
       text: expected,
@@ -219,9 +173,6 @@ describe("OpenText", () => {
     expect(textarea).toHaveValue("Texto limpio!");
     expect(screen.getByText(`13 / ${OPEN_TEXT_MAX_LENGTH}`)).toBeInTheDocument();
 
-    act(() => {
-      vi.advanceTimersByTime(300);
-    });
     expect(onChange).toHaveBeenCalledWith({
       kind: "TEXTO_ABIERTO",
       text: "Texto limpio!",

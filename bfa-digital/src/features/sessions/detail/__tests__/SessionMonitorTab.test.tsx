@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { http } from "msw";
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 
 import { PERMISSIONS } from "../../../../store/permissions";
 import { server } from "../../../../test/msw/server";
@@ -67,5 +67,45 @@ describe("SessionMonitorTab", () => {
     await renderWithProviders(<SessionMonitorTab sessionId={1} />);
     await screen.findByText("Ana López");
     expect(screen.queryByRole("button", { name: /agregar nota/i })).not.toBeInTheDocument();
+  });
+
+  it("muestra resumen e indicador por intento cuando hay respuestas rechazadas (B17) y abre el detalle", async () => {
+    server.use(
+      http.get(`${API}/sesiones/1/asignaciones`, () =>
+        ok([
+          assignmentsFixture[0],
+          {
+            ...assignmentsFixture[1],
+            rejectedAnswersCount: 2,
+            rejectedAnswers: [
+              { itemId: 1002, code: "TIEMPO_AGOTADO", rejectedAt: "2026-11-24T14:21:00" },
+              { itemId: 1004, code: "SUBTEST_FINALIZADO", rejectedAt: "2026-11-24T14:22:00" },
+            ],
+          },
+          {
+            ...assignmentsFixture[2],
+            rejectedAnswersCount: 1,
+          },
+        ]),
+      ),
+    );
+
+    await renderWithProviders(<SessionMonitorTab sessionId={1} />);
+    await screen.findByText("Carlos Ruiz");
+
+    expect(screen.getByText(/3 respuestas rechazadas/i)).toBeInTheDocument();
+
+    const carlosRow = screen.getByText("Carlos Ruiz").closest("tr") as HTMLElement;
+    const rejectBtn = within(carlosRow).getByRole("button", {
+      name: /Ver 2 respuestas rechazadas de Carlos Ruiz/i,
+    });
+    fireEvent.click(rejectBtn);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Respuestas rechazadas de Carlos Ruiz");
+    expect(dialog).toHaveTextContent("Ítem #1002");
+    expect(dialog).toHaveTextContent("TIEMPO_AGOTADO");
+    expect(dialog).toHaveTextContent("Ítem #1004");
+    expect(dialog).toHaveTextContent("SUBTEST_FINALIZADO");
   });
 });
