@@ -81,9 +81,15 @@ Cualquier ítem puede marcarse con `requiere_revision_manual`. En ese caso no se
 
 ```text
 BORRADOR ──approve──► APROBADO ──publish──► PUBLICADO ──(retiro)──► RETIRADO
-   ▲  editable           no editable           inmutable; se puede aplicar en sesiones
+   ▲  editable  ◄─return-to-draft─┘ no editable     inmutable; se puede aplicar en sesiones
    └──── clone ◄──────────────────────────────────┘
 ```
+
+Al aprobar (`POST /test-versions/{id}/approve`), el backend valida antes de cambiar de estado:
+- exige una estrategia **con implementación** y al menos una regla activa;
+- ejecuta `validateConfiguration` sobre la configuración que se publicaría: reglas activas que no estén `RETIRADO`, con sus claves y su matriz.
+
+Si hay problemas, responde 409 `La version no se puede aprobar: …` y la versión sigue en `BORRADOR`, editable. Para corregir una versión ya aprobada, devuélvela a borrador con `POST /test-versions/{id}/return-to-draft` (permiso `TEST_PUBLICAR`; solo desde `APROBADO`).
 
 Al publicar (`POST /test-versions/{id}/publish`), el backend hace esto en una sola transacción:
 1. Exige que la versión esté `APROBADO` y tenga estrategia.
@@ -118,18 +124,20 @@ Orden recomendado (cada paso usa los ids del anterior):
 | 4 | Ítems | `POST /subtests/{id}/items` `{code, itemType, responseType, prompt, order, baseScore, …}` | `TEST_CREAR` |
 | 5 | Opciones | `POST /items/{id}/options` `{code, text, order, ordinalValue}` | `TEST_CREAR` |
 | 6 | Imágenes | `POST /items/{id}/images` y `POST /options/{id}/images` (multipart) | `TEST_CREAR` |
-| 7 | Regla | `POST /subtests/{id}/scoring-rules` `{strategyId, ruleType, itemId?, priority, parametersJson, observation}` | `CALIFICACION_CONFIGURAR` |
+| 7 | Regla | `POST /subtests/{id}/scoring-rules` `{strategyId, ruleType, itemId?, priority, parametersJson, observation, active?}` | `CALIFICACION_CONFIGURAR` |
 | 8 | Claves | `POST /items/{id}/answer-key` `{ruleId, correctOptionId, expectedText, expectedNumber, numericTolerance, score, requiresManualReview}` | `CALIFICACION_CONFIGURAR` |
 | 9 | Escalas | `POST /test-versions/{id}/dimensions` `{code, name, subtestId?, order, minScore?, maxScore?}` | `CALIFICACION_CONFIGURAR` |
 | 10 | Matriz (opcional) | `PUT /scoring-rules/{id}/option-scores` `{rows:[{optionId, dimensionId, score, weight?}]}` | `CALIFICACION_CONFIGURAR` |
 | 11 | Baremos | `POST /baremos` `{versionId, dimensionId?, code, name, normativeGroup, minAge?, maxAge?, sexId?, careerId?, validFrom?, validTo?}` | `BAREMO_CONFIGURAR` |
 | 12 | Rangos | `POST /baremos/{id}/ranges` `{minScore, maxScore, percentile, category, interpretation, order}` | `BAREMO_CONFIGURAR` |
-| 13 | Aprobar | `POST /test-versions/{id}/approve` | `TEST_PUBLICAR` |
+| 13 | Aprobar | `POST /test-versions/{id}/approve` (valida la configuración; para corregir después: `POST /test-versions/{id}/return-to-draft`) | `TEST_PUBLICAR` |
 | 14 | Publicar | `POST /test-versions/{id}/publish` | `TEST_PUBLICAR` |
 
 Notas:
 - `strategyId` es el id de `GET /scoring/strategies`. Usa solo estrategias con `implemented: true`.
 - `parametersJson` tiene que ser un **objeto** JSON (`"{}"` si no hay parámetros). Cualquier otro valor da 400.
+- `PATCH /scoring-rules/{id}` acepta `active`. Si se omite o es `null`, se conserva el valor actual.
+- Los criterios de un baremo (`minAge`, `maxAge`, `sexId`, `careerId`, `validFrom`, `validTo`) se conservan en `PATCH /baremos/{id}` cuando vienen `null`. Para borrarlos, envía `clearNormativeCriteria: true`: se limpian los seis y luego se aplican los que vengan con valor.
 - Para cargar muchos ítems de una vez existe `POST /test-versions/{id}/configuration`, que guarda el documento completo de subtests, ítems, opciones, imágenes y claves que usa el builder.
 - Una escala sin `subtestId` solo recibe puntaje por la matriz. Una escala **con** `subtestId` recibe, con `CLAVE_SIMPLE`, la suma de los ítems de su subtest que no tienen matriz.
 - El conjunto exacto `clave_respuesta_opcion` todavía no tiene endpoint propio. Para `OPCION_MULTIPLE` usa `expectedText` con códigos (`"A,C"`).
@@ -168,8 +176,8 @@ POST /attempts/{id}/score
 | Total | Suma de los puntajes por ítem. |
 | Escalas | Ítem con matriz: suma `puntaje × peso` de cada opción seleccionada. Ítem sin matriz o con revisión manual: su puntaje va a la escala ligada a su subtest (la primera por orden). Solo aparecen escalas que recibieron algún aporte. |
 | Conteos | `cantidad_items` = respuestas calificadas; `correctas` / `incorrectas`; `pendientes_revision`. |
-| Omisiones | Un ítem sin fila de respuesta **no** cuenta como incorrecto. |
-| Validación al publicar | Al menos un ítem activo; cada ítem activo con exactamente una clave; clave coherente con su tipo de respuesta (tabla 2.1). |
+| Omisiones | Un ítem **sin fila de respuesta** no se califica ni cuenta como incorrecto. Si existe la fila pero está en blanco (por ejemplo, el participante visitó el ítem y no marcó nada), **sí** se califica y cuenta como incorrecta. Usa `AnswerSnapshot.isBlank()` en tu estrategia si el manual las trata distinto. |
+| Validación al aprobar y publicar | Al menos un ítem activo; cada ítem activo con exactamente una clave; clave coherente con su tipo de respuesta (tabla 2.1); las opciones correctas de la clave (por id o por código) existen y están activas en el ítem. |
 
 Si el test necesita algo distinto (corrección por azar, ítems invertidos, puntajes por opción, promedios, transformaciones, criterios de discontinuación), escribe una estrategia propia.
 
@@ -216,7 +224,7 @@ public interface ScoringStrategy {
 - cada `dimensionId`, `ruleId` y `optionId` pertenece a la configuración;
 - ningún puntaje es nulo.
 
-Los puntajes se guardan con 2 decimales: redondea explícitamente (`setScale(2, RoundingMode.HALF_UP)`) si tu fórmula produce más.
+Los puntajes se guardan con 2 decimales. Antes de persistir y de resolver el baremo, la fachada redondea total, ítems, escalas y transformados con `HALF_UP`, así que el baremo se aplica sobre el mismo valor que se guarda. Si el manual define otro redondeo, aplícalo en la estrategia.
 
 **Piezas reutilizables:**
 - `KeyedItemGrader.gradeAll(context)`: califica cada respuesta como `CLAVE_SIMPLE`, incluida la revisión manual. Devuelve `GradedItem(item, answer, key, score, manualReview)`.
@@ -412,8 +420,8 @@ Las estrategias existentes no fueron validadas contra ningún manual. La validac
 | Síntoma | Causa | Qué hacer |
 | :--- | :--- | :--- |
 | `409 La estrategia X no tiene implementacion registrada` | La versión usa una estrategia del catálogo sin clase (por ejemplo `LIKERT_ESCALA`). | Usa una estrategia con `implemented: true` o implementa la que falta. |
-| `409 La version no se puede publicar: Subtest FI: el item FI-03 no tiene clave de respuesta` | Falta una clave o es incoherente con el tipo de respuesta. | Completa la clave o marca el ítem para revisión manual. |
-| `409 El item X tiene mas de una clave de respuesta oficial` | Dos reglas activas tienen clave para el mismo ítem. | Desactiva la regla sobrante. |
+| `409 La version no se puede aprobar: Subtest FI: el item FI-03 no tiene clave de respuesta` (o `… publicar: …`) | Falta una clave, es incoherente con el tipo de respuesta o apunta a opciones inexistentes o inactivas. | Completa la clave o marca el ítem para revisión manual. Si la versión ya está aprobada, usa `return-to-draft`. |
+| `409 El item X tiene mas de una clave de respuesta oficial` | Dos reglas activas tienen clave para el mismo ítem. | Desactiva la regla sobrante con `PATCH /scoring-rules/{id}` `{…, active: false}`. |
 | `409 Contenido oficial inmutable` | Se intentó editar una versión publicada. | Clona la versión y edita la copia. |
 | `400 parametros debe ser un objeto JSON valido` | `parametersJson` no es un objeto JSON. | Envía `{}` o un objeto válido. |
 | El resultado no tiene escalas | No hay `dimension_resultado`, o la escala no está ligada al subtest y no hay matriz. | Crea las escalas (`POST /test-versions/{id}/dimensions`) con `subtestId`. |

@@ -23,7 +23,12 @@ Cada hallazgo indica severidad, evidencia, impacto y qué hay que implementar. L
 - `NUMERICA` con `valor_numerico_esperado` ± `tolerancia_numerica`.
 - `TEXTO_ABIERTO` con `texto_esperado` normalizado (sin acentos, mayúsculas, espacios colapsados).
 
-**Impacto:** la UI marca como error de publicación claves que el backend califica bien. Hoy no se puede publicar desde la interfaz un test con ítems numéricos, de texto o de selección múltiple sin revisión manual.
+**Impacto:** la UI marca como error de publicación claves que el backend califica bien:
+- claves `NUMERICA` con valor esperado;
+- claves `TEXTO_ABIERTO` con texto esperado;
+- claves `OPCION_MULTIPLE` definidas por códigos (`"A,C"`).
+
+Solo se aceptan las claves con una única opción correcta o con revisión manual. En la práctica no se puede publicar desde la interfaz un test con ítems numéricos, de texto o de selección múltiple real.
 
 **A implementar:**
 - Eliminar `UNSUPPORTED_SCORING_KEY_*` y alinear las reglas con `ClaveSimpleScoringStrategy.validateConfiguration`:
@@ -36,13 +41,19 @@ Cada hallazgo indica severidad, evidencia, impacto y qué hay que implementar. L
 
 ## F2. Falta validar en la UI que cada ítem tenga clave. Severidad: alta
 
-**Realidad del backend:** al publicar una versión `CLAVE_SIMPLE`, el backend rechaza (409) la publicación si algún ítem activo no tiene clave oficial o si la clave no es coherente con su tipo de respuesta. Devuelve un mensaje que lista subtest e ítem.
+**Realidad del backend:** al **aprobar** y al publicar una versión `CLAVE_SIMPLE`, el backend responde 409 si:
+- algún ítem activo no tiene clave;
+- la clave no es coherente con el tipo de respuesta;
+- la clave apunta a opciones inexistentes o inactivas.
+
+El mensaje lista subtest e ítem.
 
 **Impacto:** el usuario descubre el problema recién al pulsar publicar. `PublishDialog` muestra el texto del error, pero no lleva al ítem afectado.
 
 **A implementar:**
 - En `schema.ts`, un problema `MISSING_ANSWER_KEY` (severidad error, nodo del ítem) cuando la estrategia de la versión sea `CLAVE_SIMPLE`.
-- Mostrar la lista de problemas del 409 en `PublishDialog` separada por `;`. El backend la envía con el formato `La version no se puede publicar: p1; p2`.
+- Mostrar la lista de problemas del 409 en `PublishDialog` separada por `;`. El backend la envía con el formato `La version no se puede aprobar: p1; p2` (o `publicar`).
+- Agregar en la lista de versiones la acción "Volver a borrador" para versiones `APROBADO` (`POST /test-versions/{id}/return-to-draft`). Sin ella, una versión aprobada con un error solo se corrige clonándola.
 
 ## F3. No hay UI para dimensiones de resultado (escalas). Severidad: media
 
@@ -91,6 +102,7 @@ Cada hallazgo indica severidad, evidencia, impacto y qué hay que implementar. L
 
 **A implementar:**
 - Campos de escala (select de dimensiones de la versión), edad mínima y máxima, sexo y carrera (catálogos), y vigencia desde/hasta.
+- Para quitar criterios, enviar `clearNormativeCriteria: true`. En PATCH, un `null` conserva el valor actual.
 - Copiar baremos por dimensión al reutilizar subtests o versiones.
 
 ## F6. Selector de estrategia por subtest engañoso. Severidad: baja
