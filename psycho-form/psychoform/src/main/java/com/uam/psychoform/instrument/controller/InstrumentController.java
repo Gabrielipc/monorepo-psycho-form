@@ -6,6 +6,7 @@ import com.uam.psychoform.instrument.model.*;
 import com.uam.psychoform.instrument.service.*;
 import com.uam.psychoform.dto.ApiResponse;
 import com.uam.psychoform.dto.EntityView;
+import com.uam.psychoform.scoring.service.ScoringStrategyRegistry;
 import com.uam.psychoform.security.SecurityPermissions;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,11 +17,16 @@ public class InstrumentController {
     private final InstrumentAdminService admin;
     private final VersionTestService versions;
     private final InstrumentImageService images;
+    private final ScoringStrategyRegistry strategyRegistry;
+    private final ScoringDimensionAdminService dimensions;
 
-    public InstrumentController(InstrumentAdminService admin, VersionTestService versions, InstrumentImageService images) {
+    public InstrumentController(InstrumentAdminService admin, VersionTestService versions, InstrumentImageService images,
+            ScoringStrategyRegistry strategyRegistry, ScoringDimensionAdminService dimensions) {
         this.admin = admin;
         this.versions = versions;
         this.images = images;
+        this.strategyRegistry = strategyRegistry;
+        this.dimensions = dimensions;
     }
 
     @GetMapping("/tests")
@@ -71,6 +77,12 @@ public class InstrumentController {
     @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
     public ApiResponse<?> approve(@PathVariable Long id) {
         return ApiResponse.ok(EntityView.of(versions.approveVersion(id)));
+    }
+
+    @PostMapping("/test-versions/{id}/return-to-draft")
+    @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
+    public ApiResponse<?> returnToDraft(@PathVariable Long id) {
+        return ApiResponse.ok(EntityView.of(versions.returnToDraft(id)));
     }
 
     @PostMapping("/test-versions/{id}/publish")
@@ -273,7 +285,9 @@ public class InstrumentController {
     @GetMapping("/scoring/strategies")
     @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
     public ApiResponse<?> strategies() {
-        return ApiResponse.ok(EntityView.of(admin.listStrategies()));
+        return ApiResponse.ok(EntityView.of(admin.listStrategies().stream()
+                .map(strategy -> ScoringStrategyDTO.from(strategy, strategyRegistry.isImplemented(strategy.getCodigo())))
+                .toList()));
     }
 
     @GetMapping("/subtests/{id}/scoring-rules")
@@ -287,7 +301,7 @@ public class InstrumentController {
     public ApiResponse<?> scoringRule(@PathVariable Long id, @Valid @RequestBody ScoringRuleRequest request) {
         return ApiResponse.ok(EntityView.of(admin.createScoringRule(id,
                 new InstrumentAdminService.ScoringRuleCommand(request.strategyId(), request.ruleType(), request.itemId(),
-                        request.priority(), request.parametersJson(), request.observation()))));
+                        request.priority(), request.parametersJson(), request.observation(), request.active()))));
     }
 
     @PatchMapping("/scoring-rules/{id}")
@@ -326,9 +340,7 @@ public class InstrumentController {
     @PostMapping("/baremos")
     @PreAuthorize(SecurityPermissions.BAREMO_CONFIGURAR)
     public ApiResponse<?> baremo(@Valid @RequestBody BaremoRequest request) {
-        return ApiResponse.ok(EntityView.of(admin.createBaremo(new InstrumentAdminService.BaremoCommand(
-                request.versionId(), request.dimensionId(), request.code(), request.name(), request.description(),
-                request.normativeGroup()))));
+        return ApiResponse.ok(EntityView.of(admin.createBaremo(toCommand(request))));
     }
 
     @PatchMapping("/baremos/{id}")
@@ -382,7 +394,7 @@ public class InstrumentController {
 
     private InstrumentAdminService.ScoringRuleCommand toCommand(ScoringRuleRequest request) {
         return new InstrumentAdminService.ScoringRuleCommand(request.strategyId(), request.ruleType(), request.itemId(),
-                request.priority(), request.parametersJson(), request.observation());
+                request.priority(), request.parametersJson(), request.observation(), request.active());
     }
 
     private InstrumentAdminService.AnswerKeyCommand toCommand(AnswerKeyRequest request) {
@@ -393,12 +405,58 @@ public class InstrumentController {
 
     private InstrumentAdminService.BaremoCommand toCommand(BaremoRequest request) {
         return new InstrumentAdminService.BaremoCommand(request.versionId(), request.dimensionId(), request.code(),
-                request.name(), request.description(), request.normativeGroup());
+                request.name(), request.description(), request.normativeGroup(), request.minAge(), request.maxAge(),
+                request.sexId(), request.careerId(), request.validFrom(), request.validTo(),
+                request.clearNormativeCriteria());
     }
 
     private InstrumentAdminService.BaremoRangeCommand toCommand(BaremoRangeRequest request) {
         return new InstrumentAdminService.BaremoRangeCommand(request.minScore(), request.maxScore(),
                 request.percentile(), request.category(), request.interpretation(), request.recommendation(),
                 request.order());
+    }
+
+    @GetMapping("/test-versions/{id}/dimensions")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR + " or " + SecurityPermissions.TEST_LEER)
+    public ApiResponse<?> getDimensions(@PathVariable Long id) {
+        return ApiResponse.ok(dimensions.listDimensions(id));
+    }
+
+    @PostMapping("/test-versions/{id}/dimensions")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> createDimension(@PathVariable Long id, @Valid @RequestBody DimensionRequest request) {
+        return ApiResponse.ok(dimensions.createDimension(id, new ScoringDimensionAdminService.DimensionCommand(
+                request.code(), request.name(), request.description(), request.subtestId(), request.order(),
+                request.minScore(), request.maxScore(), request.active())));
+    }
+
+    @PatchMapping("/dimensions/{id}")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> updateDimension(@PathVariable Long id, @Valid @RequestBody DimensionPatchRequest request) {
+        return ApiResponse.ok(dimensions.updateDimension(id, new ScoringDimensionAdminService.DimensionCommand(
+                request.code(), request.name(), request.description(), request.subtestId(), request.order(),
+                request.minScore(), request.maxScore(), request.active())));
+    }
+
+    @DeleteMapping("/dimensions/{id}")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> deleteDimension(@PathVariable Long id) {
+        dimensions.deleteDimension(id);
+        return ApiResponse.ok(null);
+    }
+
+    @GetMapping("/scoring-rules/{id}/option-scores")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR + " or " + SecurityPermissions.TEST_LEER)
+    public ApiResponse<?> getOptionScores(@PathVariable Long id) {
+        return ApiResponse.ok(dimensions.listOptionScores(id));
+    }
+
+    @PutMapping("/scoring-rules/{id}/option-scores")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> replaceOptionScores(@PathVariable Long id, @Valid @RequestBody OptionScoresRequest request) {
+        return ApiResponse.ok(dimensions.replaceOptionScores(id, request.rows().stream()
+                .map(row -> new ScoringDimensionAdminService.OptionScoreRow(row.optionId(), row.dimensionId(),
+                        row.score(), row.weight(), row.active()))
+                .toList()));
     }
 }

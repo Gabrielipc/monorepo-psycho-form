@@ -5,6 +5,10 @@ import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.repository.BaremoPublicationRepository;
 import com.uam.psychoform.instrument.repository.ReglaCalificacionPublicationRepository;
 import com.uam.psychoform.instrument.repository.VersionTestRepository;
+import com.uam.psychoform.scoring.service.ScoringContextLoader;
+import com.uam.psychoform.scoring.service.ScoringStrategyRegistry;
+import com.uam.psychoform.scoring.service.strategy.ScoringConfiguration;
+import com.uam.psychoform.scoring.service.strategy.ScoringStrategy;
 import com.uam.psychoform.security.CurrentActor;
 import com.uam.psychoform.security.SecurityPermissions;
 import com.uam.psychoform.security.model.Usuario;
@@ -12,6 +16,7 @@ import com.uam.psychoform.security.repository.UsuarioRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,25 +31,30 @@ public class VersionTestService {
     private final CurrentActor currentActor;
     private final ReglaCalificacionPublicationRepository reglas;
     private final BaremoPublicationRepository baremos;
+    private final ScoringStrategyRegistry strategies;
+    private final ScoringContextLoader scoringLoader;
     private final Clock clock;
 
     public VersionTestService(VersionTestRepository repository) {
-        this(repository, null, null, Clock.systemUTC(), null, null);
+        this(repository, null, null, Clock.systemUTC(), null, null, null, null);
     }
 
     public VersionTestService(VersionTestRepository repository, UsuarioRepository usuarios, CurrentActor currentActor,
             Clock clock) {
-        this(repository, usuarios, currentActor, clock, null, null);
+        this(repository, usuarios, currentActor, clock, null, null, null, null);
     }
 
     @Autowired
     public VersionTestService(VersionTestRepository repository, UsuarioRepository usuarios, CurrentActor currentActor,
-            Clock clock, ReglaCalificacionPublicationRepository reglas, BaremoPublicationRepository baremos) {
+            Clock clock, ReglaCalificacionPublicationRepository reglas, BaremoPublicationRepository baremos,
+            ScoringStrategyRegistry strategies, ScoringContextLoader scoringLoader) {
         this.repository = repository;
         this.usuarios = usuarios;
         this.currentActor = currentActor;
         this.reglas = reglas;
         this.baremos = baremos;
+        this.strategies = strategies;
+        this.scoringLoader = scoringLoader;
         this.clock = clock;
     }
 
@@ -67,12 +77,34 @@ public class VersionTestService {
         if (version.getEstado() != EstadoVersionTest.BORRADOR && version.getEstado() != EstadoVersionTest.EN_REVISION) {
             throw new IllegalStateException("La versión no puede aprobarse en su estado actual");
         }
+        if (version.getEstrategiaCalificacion() == null) {
+            throw new IllegalStateException("La versión requiere estrategia de calificación para aprobarse");
+        }
+        // Se valida lo que se publicaria, para no dejar la version atrapada en APROBADO (no editable).
+        validateScoringConfiguration(version, ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE,
+                "aprobar", true);
         UUID actorId = currentActor.usuarioId();
         Usuario actor = usuarios.findById(actorId)
                 .orElseThrow(() -> new EntityNotFoundException("Usuario autenticado no encontrado: " + actorId));
         version.setEstado(EstadoVersionTest.APROBADO);
         version.setAprobadoPor(actor);
         version.setAprobadoEn(LocalDateTime.now(clock));
+        repository.save(version);
+        return version;
+    }
+
+    /** Devuelve una version APROBADO a BORRADOR para corregirla; limpia la aprobacion. */
+    @Transactional
+    @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
+    public VersionTest returnToDraft(long versionId) {
+        VersionTest version = repository.findByIdForUpdate(versionId)
+                .orElseThrow(() -> new EntityNotFoundException("Versión no encontrada: " + versionId));
+        if (version.getEstado() != EstadoVersionTest.APROBADO) {
+            throw new IllegalStateException("Solo una versión aprobada puede devolverse a borrador");
+        }
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        version.setAprobadoPor(null);
+        version.setAprobadoEn(null);
         repository.save(version);
         return version;
     }
@@ -97,9 +129,31 @@ public class VersionTestService {
             throw new IllegalStateException("La versión requiere reglas de calificación activas para publicarse");
         }
         baremos.publishActiveByVersionId(versionId, actor, approvedAt);
+        validateScoringConfiguration(version, ScoringContextLoader.ConfigurationScope.OFFICIAL, "publicar", false);
         version.setEstado(EstadoVersionTest.PUBLICADO);
         version.setPublicadoEn(LocalDateTime.now(clock));
         repository.save(version);
         return version;
+    }
+
+    /**
+     * La estrategia de la version debe estar implementada y aceptar su configuracion. Al publicar corre despues de
+     * promover reglas y baremos (configuracion oficial) y antes de marcar PUBLICADO; al aprobar evalua las reglas que se
+     * publicarian. Ambos casos en la misma transaccion que el cambio de estado.
+     */
+    private void validateScoringConfiguration(VersionTest version, ScoringContextLoader.ConfigurationScope scope,
+            String action, boolean requireRules) {
+        ScoringStrategy strategy = strategies.require(version.getEstrategiaCalificacion());
+        ScoringConfiguration configuration = scope == ScoringContextLoader.ConfigurationScope.OFFICIAL
+                ? scoringLoader.loadConfiguration(version.getId())
+                : scoringLoader.loadConfiguration(version.getId(), scope);
+        if (requireRules && configuration.rules().isEmpty()) {
+            throw new IllegalStateException("La versión requiere reglas de calificación activas para publicarse");
+        }
+        List<String> problems = strategy.validateConfiguration(configuration);
+        if (!problems.isEmpty()) {
+            throw new IllegalStateException(
+                    "La version no se puede " + action + ": " + String.join("; ", problems));
+        }
     }
 }

@@ -4,53 +4,41 @@ import com.uam.psychoform.instrument.model.Baremo;
 import com.uam.psychoform.instrument.model.EstadoConfiguracion;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 public interface BaremoRepository extends JpaRepository<Baremo, Long> {
-    default Optional<Baremo> findPreferredDimensionBaremo(Long versionTestId, Long dimensionId) {
-        return findPreferredDimensionBaremoByEstados(versionTestId, dimensionId,
+    default List<Baremo> findCandidatesByDimensions(Long versionTestId, Collection<Long> dimensionIds) {
+        return findCandidatesByDimensionsAndEstados(versionTestId, dimensionIds,
                 List.of(EstadoConfiguracion.APROBADO, EstadoConfiguracion.PUBLICADO));
     }
 
-    default Optional<Baremo> findPreferredTotalBaremo(Long versionTestId) {
-        return findPreferredTotalBaremoByEstados(versionTestId,
+    default List<Baremo> findTotalCandidates(Long versionTestId) {
+        return findTotalCandidatesByEstados(versionTestId,
                 List.of(EstadoConfiguracion.APROBADO, EstadoConfiguracion.PUBLICADO));
     }
 
-    @Query("""
-            select b from Baremo b
-            where b.versionTest.id = :versionTestId
-              and b.dimensionResultado is null
-              and b.estado in :estados
-            order by b.aprobadoEn desc nulls last, b.id desc
-            """)
-    Optional<Baremo> findPreferredTotalBaremoByEstados(Long versionTestId, Collection<EstadoConfiguracion> estados);
-
-    @Query("""
-            select b from Baremo b
-            where b.versionTest.id = :versionTestId
-              and b.dimensionResultado.id = :dimensionId
-              and b.estado in :estados
-            order by b.aprobadoEn desc nulls last, b.id desc
-            """)
-    Optional<Baremo> findPreferredDimensionBaremoByEstados(Long versionTestId, Long dimensionId,
-            Collection<EstadoConfiguracion> estados);
-
-    default List<Baremo> findPreferredDimensionBaremos(Long versionTestId, Collection<Long> dimensionIds) {
-        return findPreferredDimensionBaremosByEstados(versionTestId, dimensionIds,
-                List.of(EstadoConfiguracion.APROBADO, EstadoConfiguracion.PUBLICADO));
-    }
-
+    /** Baremos oficiales de las dimensiones indicadas (con los datos de sus criterios normativos). */
     @Query("""
             select b from Baremo b
             join fetch b.dimensionResultado
+            left join fetch b.criterioSexo
+            left join fetch b.criterioCarrera
             where b.versionTest.id = :versionTestId
               and b.dimensionResultado.id in :dimensionIds
               and b.estado in :estados
-            order by b.dimensionResultado.id asc, b.aprobadoEn desc nulls last, b.id desc
             """)
-    List<Baremo> findPreferredDimensionBaremosByEstados(Long versionTestId, Collection<Long> dimensionIds,
+    List<Baremo> findCandidatesByDimensionsAndEstados(Long versionTestId, Collection<Long> dimensionIds,
             Collection<EstadoConfiguracion> estados);
+
+    /** Baremos oficiales del puntaje total (sin dimension). */
+    @Query("""
+            select b from Baremo b
+            left join fetch b.criterioSexo
+            left join fetch b.criterioCarrera
+            where b.versionTest.id = :versionTestId
+              and b.dimensionResultado is null
+              and b.estado in :estados
+            """)
+    List<Baremo> findTotalCandidatesByEstados(Long versionTestId, Collection<EstadoConfiguracion> estados);
 }

@@ -1,5 +1,12 @@
 package com.uam.psychoform.instrument.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
+import com.uam.psychoform.academic.model.Carrera;
+import com.uam.psychoform.academic.model.CatalogoSexo;
 import com.uam.psychoform.instrument.model.*;
 import com.uam.psychoform.instrument.dto.ImageResourceDTO;
 import com.uam.psychoform.instrument.dto.ItemDTO;
@@ -16,6 +23,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityNotFoundException;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.ArrayList;
@@ -33,6 +41,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class InstrumentAdminService {
+    private static final String PARAMETERS_ERROR = "parametros debe ser un objeto JSON valido";
+    private static final ObjectReader PARAMETERS_READER = new ObjectMapper().readerFor(JsonNode.class)
+            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     private final EntityManager em;
     private final VersionTestRepository versions;
     private final UsuarioRepository users;
@@ -250,14 +262,30 @@ public class InstrumentAdminService {
         rule.setEstrategiaCalificacion(find(EstrategiaCalificacion.class, command.strategyId()));
         rule.setTipoRegla(command.ruleType());
         rule.setPrioridad(command.priority() == null ? 1 : command.priority());
-        rule.setActiva(true);
+        rule.setActiva(command.active() == null || command.active());
         rule.setEstado(EstadoConfiguracion.BORRADOR);
-        rule.setParametros(command.parametersJson() == null ? "{}" : command.parametersJson());
+        rule.setParametros(validParameters(command.parametersJson()));
         rule.setObservacion(command.observation());
         rule.setCreadoPor(currentUser());
         rule.setCreadoEn(LocalDateTime.now(clock));
         em.persist(rule);
         return rule;
+    }
+
+    /** {@code parametros} debe ser un objeto JSON valido; si es nulo se guarda {@code {}}. */
+    private static String validParameters(String parametersJson) {
+        if (parametersJson == null) {
+            return "{}";
+        }
+        try {
+            JsonNode node = PARAMETERS_READER.readTree(parametersJson);
+            if (node == null || !node.isObject()) {
+                throw new IllegalArgumentException(PARAMETERS_ERROR);
+            }
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException(PARAMETERS_ERROR);
+        }
+        return parametersJson;
     }
 
     @Transactional
@@ -269,8 +297,11 @@ public class InstrumentAdminService {
         rule.setEstrategiaCalificacion(find(EstrategiaCalificacion.class, command.strategyId()));
         rule.setTipoRegla(command.ruleType());
         rule.setPrioridad(command.priority() == null ? 1 : command.priority());
-        rule.setParametros(command.parametersJson() == null ? "{}" : command.parametersJson());
+        rule.setParametros(validParameters(command.parametersJson()));
         rule.setObservacion(command.observation());
+        if (command.active() != null) {
+            rule.setActiva(command.active());
+        }
         return rule;
     }
 
@@ -413,6 +444,7 @@ public class InstrumentAdminService {
         baremo.setNombre(command.name());
         baremo.setDescripcion(command.description());
         baremo.setGrupoNormativo(command.normativeGroup());
+        applyNormativeCriteria(baremo, command, false);
         baremo.setEstado(EstadoConfiguracion.BORRADOR);
         baremo.setCreadoPor(currentUser());
         baremo.setCreadoEn(LocalDateTime.now(clock));
@@ -430,7 +462,57 @@ public class InstrumentAdminService {
         baremo.setNombre(command.name());
         baremo.setDescripcion(command.description());
         baremo.setGrupoNormativo(command.normativeGroup());
+        applyNormativeCriteria(baremo, command, true);
         return baremo;
+    }
+
+    /**
+     * Aplica los criterios normativos del request. En la actualizacion un valor nulo conserva el actual, salvo que
+     * {@code clearNormativeCriteria} sea true (limpia los seis criterios antes de aplicar los no nulos).
+     */
+    private void applyNormativeCriteria(Baremo baremo, BaremoCommand command, boolean update) {
+        if (update && Boolean.TRUE.equals(command.clearNormativeCriteria())) {
+            baremo.setCriterioEdadMinima(null);
+            baremo.setCriterioEdadMaxima(null);
+            baremo.setCriterioSexo(null);
+            baremo.setCriterioCarrera(null);
+            baremo.setVigenteDesde(null);
+            baremo.setVigenteHasta(null);
+        }
+        if (command.minAge() != null) {
+            baremo.setCriterioEdadMinima(command.minAge());
+        }
+        if (command.maxAge() != null) {
+            baremo.setCriterioEdadMaxima(command.maxAge());
+        }
+        if (command.sexId() != null) {
+            CatalogoSexo sex = em.find(CatalogoSexo.class, command.sexId());
+            if (sex == null) {
+                throw new IllegalArgumentException("El sexo indicado en el criterio normativo no existe");
+            }
+            baremo.setCriterioSexo(sex);
+        }
+        if (command.careerId() != null) {
+            Carrera career = em.find(Carrera.class, command.careerId());
+            if (career == null) {
+                throw new IllegalArgumentException("La carrera indicada en el criterio normativo no existe");
+            }
+            baremo.setCriterioCarrera(career);
+        }
+        if (command.validFrom() != null) {
+            baremo.setVigenteDesde(command.validFrom());
+        }
+        if (command.validTo() != null) {
+            baremo.setVigenteHasta(command.validTo());
+        }
+        if (baremo.getCriterioEdadMinima() != null && baremo.getCriterioEdadMaxima() != null
+                && baremo.getCriterioEdadMinima() > baremo.getCriterioEdadMaxima()) {
+            throw new IllegalArgumentException("La edad minima no puede ser mayor que la edad maxima");
+        }
+        if (baremo.getVigenteDesde() != null && baremo.getVigenteHasta() != null
+                && baremo.getVigenteDesde().isAfter(baremo.getVigenteHasta())) {
+            throw new IllegalArgumentException("La vigencia inicial no puede ser posterior a la vigencia final");
+        }
     }
 
     @Transactional
@@ -1479,7 +1561,7 @@ public class InstrumentAdminService {
     }
 
     public record ScoringRuleCommand(Short strategyId, TipoReglaCalificacion ruleType, Long itemId, Integer priority,
-            String parametersJson, String observation) {
+            String parametersJson, String observation, Boolean active) {
     }
 
     public record AnswerKeyCommand(Long ruleId, Long correctOptionId, String expectedText, BigDecimal expectedNumber,
@@ -1487,7 +1569,8 @@ public class InstrumentAdminService {
     }
 
     public record BaremoCommand(Long versionId, Long dimensionId, String code, String name, String description,
-            String normativeGroup) {
+            String normativeGroup, Short minAge, Short maxAge, Short sexId, Short careerId, LocalDate validFrom,
+            LocalDate validTo, Boolean clearNormativeCriteria) {
     }
 
     public record BaremoRangeCommand(BigDecimal minScore, BigDecimal maxScore, BigDecimal percentile, String category,

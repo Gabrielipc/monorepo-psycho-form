@@ -16,6 +16,7 @@ import com.uam.psychoform.audit.controller.AuditController;
 import com.uam.psychoform.audit.service.AuditLogService;
 import com.uam.psychoform.instrument.controller.InstrumentController;
 import com.uam.psychoform.instrument.service.InstrumentAdminService;
+import com.uam.psychoform.instrument.service.ScoringDimensionAdminService;
 import com.uam.psychoform.instrument.service.VersionTestService;
 import com.uam.psychoform.reporting.controller.AttemptController;
 import com.uam.psychoform.reporting.controller.ReportController;
@@ -23,7 +24,7 @@ import com.uam.psychoform.reporting.controller.ResultController;
 import com.uam.psychoform.reporting.service.AttemptQueryService;
 import com.uam.psychoform.reporting.service.ReportRegistryService;
 import com.uam.psychoform.reporting.service.ResultQueryService;
-import com.uam.psychoform.scoring.service.ClaveSimpleScoringService;
+import com.uam.psychoform.scoring.service.ScoringService;
 import com.uam.psychoform.security.controller.AuthController;
 import com.uam.psychoform.security.controller.RoleController;
 import com.uam.psychoform.security.controller.UserController;
@@ -67,7 +68,8 @@ class SecurityArchitectureTest {
             InstrumentAdminService.class,
             VersionTestService.class,
             AuditLogService.class,
-            ClaveSimpleScoringService.class,
+            ScoringService.class,
+            ScoringDimensionAdminService.class,
             AttemptQueryService.class,
             ResultQueryService.class,
             ReportRegistryService.class,

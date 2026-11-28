@@ -5,16 +5,12 @@ import com.uam.psychoform.assessment.repository.IntentoTestRepository;
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
 import com.uam.psychoform.audit.service.AuditLogService;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
-import com.uam.psychoform.instrument.model.DimensionResultado;
-import com.uam.psychoform.instrument.model.Subtest;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.model.EstadoRevisionManual;
 import com.uam.psychoform.scoring.model.Resultado;
-import com.uam.psychoform.scoring.model.ResultadoDimension;
 import com.uam.psychoform.scoring.model.RevisionManualRespuesta;
 import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
-import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
 import com.uam.psychoform.scoring.repository.ResultadoRepository;
 import com.uam.psychoform.scoring.repository.RevisionManualRespuestaRepository;
 import com.uam.psychoform.security.CurrentActor;
@@ -25,9 +21,7 @@ import jakarta.persistence.EntityNotFoundException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,9 +37,8 @@ public class ManualReviewService {
     private final IntentoTestRepository attempts;
     private final ResultadoRepository results;
     private final CalificacionRespuestaRepository gradings;
-    private final ResultadoDimensionRepository dimensionResults;
     private final ClaveRespuestaLookupRepository keys;
-    private final DimensionScoreSupport dimensionScores;
+    private final ResultRecalculator recalculator;
     private final UsuarioRepository users;
     private final CurrentActor currentActor;
     private final AuditLogService audit;
@@ -53,17 +46,15 @@ public class ManualReviewService {
 
     public ManualReviewService(RevisionManualRespuestaRepository reviews, RespuestaItemRepository answers,
             IntentoTestRepository attempts, ResultadoRepository results, CalificacionRespuestaRepository gradings,
-            ResultadoDimensionRepository dimensionResults, ClaveRespuestaLookupRepository keys,
-            DimensionScoreSupport dimensionScores, UsuarioRepository users, CurrentActor currentActor,
-            AuditLogService audit, Clock clock) {
+            ClaveRespuestaLookupRepository keys, ResultRecalculator recalculator, UsuarioRepository users,
+            CurrentActor currentActor, AuditLogService audit, Clock clock) {
         this.reviews = reviews;
         this.answers = answers;
         this.attempts = attempts;
         this.results = results;
         this.gradings = gradings;
-        this.dimensionResults = dimensionResults;
         this.keys = keys;
-        this.dimensionScores = dimensionScores;
+        this.recalculator = recalculator;
         this.users = users;
         this.currentActor = currentActor;
         this.audit = audit;
@@ -86,6 +77,7 @@ public class ManualReviewService {
     public PendingReviewView createPendingForAnswer(Long answerId) {
         RespuestaItem answer = answers.findById(answerId)
                 .orElseThrow(() -> new EntityNotFoundException("Respuesta no encontrada: " + answerId));
+        lockAttempt(answer.getIntento().getId());
         RevisionManualRespuesta existing = reviews.findByRespuestaId(answerId).orElse(null);
         if (existing != null) {
             return toView(existing);
@@ -94,9 +86,11 @@ public class ManualReviewService {
         review.setRespuesta(answer);
         review.setEstado(EstadoRevisionManual.PENDIENTE);
         review.setCreadoEn(LocalDateTime.now(clock));
-        reviews.save(review);
+        reviews.saveAndFlush(review);
         answer.setRequiereRevisionManual(true);
-        answers.save(answer);
+        answers.saveAndFlush(answer);
+        // Si el intento ya esta calificado, el resultado debe reflejar la nueva revision pendiente.
+        results.findByIntentoId(answer.getIntento().getId()).ifPresent(recalculator::recalculate);
         return toView(review);
     }
 
@@ -107,6 +101,8 @@ public class ManualReviewService {
                 .orElseThrow(() -> new EntityNotFoundException("Revision no encontrada: " + reviewId));
         RespuestaItem answer = review.getRespuesta();
         Long attemptId = answer.getIntento().getId();
+        // Serializa por intento: cada resolucion recalcula el total completo. El bloqueo dura toda la transaccion.
+        lockAttempt(attemptId);
         BigDecimal score = command.score();
         if (score != null && score.signum() < 0) {
             throw new IllegalArgumentException("El puntaje no puede ser negativo");
@@ -114,9 +110,6 @@ public class ManualReviewService {
         if (command.approved() && score == null) {
             throw new IllegalArgumentException("El puntaje es obligatorio para aprobar la revision");
         }
-        // Serializa las resoluciones de un mismo intento: cada una recalcula el total completo.
-        attempts.findByIdForUpdate(attemptId).orElseThrow(
-                () -> new EntityNotFoundException("Intento no encontrado: " + attemptId));
         Resultado result = results.findByIntentoId(attemptId).orElseThrow(
                 () -> new IllegalStateException("El intento aun no tiene resultado calificado"));
         CalificacionRespuesta grading = gradings.findByResultadoId(result.getId()).stream()
@@ -131,24 +124,19 @@ public class ManualReviewService {
         review.setComentario(command.comment());
         review.setRevisadoPor(currentUser());
         review.setRevisadoEn(LocalDateTime.now(clock));
-        reviews.save(review);
+        reviews.saveAndFlush(review);
 
-        if (command.approved()) {
-            grading.setPuntajeObtenido(score);
-            grading.setEsCorrecta(score.signum() > 0);
-            grading.setRequiereRevisionManual(false);
-        } else {
-            // Observada: no aplica puntaje y sigue pendiente (si estaba revisada, vuelve al estado provisional).
-            grading.setPuntajeObtenido(BigDecimal.ZERO);
-            grading.setEsCorrecta(false);
-            grading.setRequiereRevisionManual(true);
-        }
-        gradings.save(grading);
-        recalculateResult(result, answer);
+        // La calificacion, los totales y las dimensiones los recalcula la estrategia de la version.
+        recalculator.recalculate(result);
         audit.recordTrusted(new AuditLogService.AuditEvent("REVISION_MANUAL_GUARDADA", "revision_manual_respuesta",
                 String.valueOf(reviewId), null,
                 "{\"score\":" + command.score() + ",\"approved\":" + command.approved() + "}", null, null));
         return toView(review);
+    }
+
+    private void lockAttempt(Long attemptId) {
+        attempts.findByIdForUpdate(attemptId).orElseThrow(
+                () -> new EntityNotFoundException("Intento no encontrado: " + attemptId));
     }
 
     private void validateScoreAgainstKey(BigDecimal score, CalificacionRespuesta grading, RespuestaItem answer) {
@@ -160,64 +148,6 @@ public class ManualReviewService {
         if (key != null && key.getPuntaje() != null && score.compareTo(key.getPuntaje()) > 0) {
             throw new IllegalArgumentException("El puntaje no puede superar el maximo del item (" + key.getPuntaje() + ")");
         }
-    }
-
-    /**
-     * Recalcula los totales del resultado a partir de sus calificaciones y de las revisiones del intento, y recalcula
-     * desde cero el puntaje de la dimension del subtest de la respuesta resuelta (aporte automatico de las respuestas
-     * sin revision manual mas el puntaje de las revisiones REVISADO), con su baremo/rango. Recalcular en lugar de
-     * sumar un delta evita arrastrar el aporte automatico que los resultados historicos dejaron en esa fila.
-     */
-    private void recalculateResult(Resultado result, RespuestaItem answer) {
-        List<CalificacionRespuesta> gradingList = gradings.findByResultadoId(result.getId());
-        BigDecimal total = gradingList.stream()
-                .map(CalificacionRespuesta::getPuntajeObtenido)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        int correct = (int) gradingList.stream().filter(g -> Boolean.TRUE.equals(g.getEsCorrecta())).count();
-        int pending = (int) reviews.findByRespuestaIntentoId(result.getIntento().getId()).stream()
-                .filter(r -> r.getEstado() != EstadoRevisionManual.REVISADO)
-                .count();
-        result.setPuntajeTotalDirecto(total);
-        result.setCantidadCorrectas(correct);
-        result.setCantidadIncorrectas(gradingList.size() - correct);
-        result.setCantidadPendientesRevision(pending);
-        result.setRequiereRevisionManual(pending > 0);
-        results.save(result);
-        List<ResultadoDimension> dimensions = new ArrayList<>(dimensionResults.findByResultadoId(result.getId()));
-        recalculateSubtestDimension(result, dimensions, answer);
-        dimensions.forEach(d -> d.setRequiereRevisionManual(pending > 0));
-        dimensionResults.saveAll(dimensions);
-    }
-
-    /** Recalcula desde cero el puntaje y el baremo de la dimension del subtest del item (crea la fila si faltaba). */
-    private void recalculateSubtestDimension(Resultado result, List<ResultadoDimension> dimensions, RespuestaItem answer) {
-        Subtest subtest = answer.getItem().getSubtest();
-        if (subtest == null) {
-            return;
-        }
-        Long versionId = result.getIntento().getAsignacion().getSesionAplicacion().getVersionTest().getId();
-        DimensionResultado dimension = dimensionScores.dimensionsBySubtest(versionId).get(subtest.getId());
-        if (dimension == null) {
-            return;
-        }
-        Map<Long, BigDecimal> directScores = dimensionScores.directScoresByDimension(versionId,
-                result.getIntento().getId());
-        ResultadoDimension row = dimensions.stream()
-                .filter(d -> d.getDimensionResultado().getId().equals(dimension.getId()))
-                .findFirst()
-                .orElse(null);
-        if (row == null) {
-            if (!directScores.containsKey(dimension.getId())) {
-                return;
-            }
-            row = new ResultadoDimension();
-            row.setResultado(result);
-            row.setDimensionResultado(dimension);
-            row.setRequiereRevisionManual(result.getRequiereRevisionManual());
-            dimensions.add(row);
-        }
-        row.setPuntajeDirecto(directScores.getOrDefault(dimension.getId(), BigDecimal.ZERO));
-        dimensionScores.applyBaremo(versionId, List.of(row));
     }
 
     private PendingReviewView toView(RevisionManualRespuesta review) {

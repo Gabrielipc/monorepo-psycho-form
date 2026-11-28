@@ -1,7 +1,7 @@
 package com.uam.psychoform.reporting.controller;
 
 import com.uam.psychoform.reporting.service.ResultQueryService;
-import com.uam.psychoform.scoring.service.ClaveSimpleScoringService;
+import com.uam.psychoform.scoring.service.ScoringService;
 import com.uam.psychoform.dto.ApiResponse;
 import com.uam.psychoform.dto.EntityView;
 import com.uam.psychoform.security.SecurityPermissions;
@@ -10,10 +10,10 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 public class ResultController {
-    private final ClaveSimpleScoringService scoring;
+    private final ScoringService scoring;
     private final ResultQueryService queries;
 
-    public ResultController(ClaveSimpleScoringService scoring, ResultQueryService queries) {
+    public ResultController(ScoringService scoring, ResultQueryService queries) {
         this.scoring = scoring;
         this.queries = queries;
     }

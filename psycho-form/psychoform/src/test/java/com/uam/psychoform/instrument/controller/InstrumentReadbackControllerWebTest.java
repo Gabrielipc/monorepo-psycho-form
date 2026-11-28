@@ -14,12 +14,15 @@ import com.uam.psychoform.instrument.dto.OptionDTO;
 import com.uam.psychoform.instrument.dto.SubtestCloneTemplateDTO;
 import com.uam.psychoform.instrument.dto.VersionConfigurationRequest;
 import com.uam.psychoform.instrument.model.EstadoVersionTest;
+import com.uam.psychoform.instrument.model.EstrategiaCalificacion;
+import com.uam.psychoform.instrument.model.TipoEstrategiaCalificacion;
 import com.uam.psychoform.instrument.model.Subtest;
 import com.uam.psychoform.instrument.model.TipoItem;
 import com.uam.psychoform.instrument.model.TipoRespuesta;
 import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.service.ImageUploadResponse;
 import com.uam.psychoform.instrument.service.InstrumentAdminService;
+import com.uam.psychoform.instrument.service.ScoringDimensionAdminService;
 import com.uam.psychoform.instrument.service.InstrumentImageService;
 import com.uam.psychoform.instrument.service.VersionTestService;
 import com.uam.psychoform.security.model.EstadoGeneral;
@@ -54,6 +57,9 @@ class InstrumentReadbackControllerWebTest {
 
     @MockitoBean
     InstrumentImageService images;
+
+    @MockitoBean
+    ScoringDimensionAdminService dimensions;
 
     @Test
     void getItemsReturnsImagesInEachItemDto() throws Exception {
@@ -175,6 +181,41 @@ class InstrumentReadbackControllerWebTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].id").value(120))
                 .andExpect(jsonPath("$.data[0].codigoSubtest").value("MEM-COPY"));
+    }
+
+    @Test
+    void getScoringStrategiesKeepsEntityFieldsAndAddsImplemented() throws Exception {
+        EstrategiaCalificacion implemented = strategy((short) 1, "CLAVE_SIMPLE", TipoEstrategiaCalificacion.CLAVE_SIMPLE);
+        EstrategiaCalificacion notImplemented = strategy((short) 2, "LIKERT_ESCALA",
+                TipoEstrategiaCalificacion.LIKERT_ESCALA);
+        when(admin.listStrategies()).thenReturn(List.of(implemented, notImplemented));
+
+        mvc.perform(get("/scoring/strategies").header("Authorization", "Bearer " + token("CALIFICACION_CONFIGURAR")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].id").value(1))
+                .andExpect(jsonPath("$.data[0].codigo").value("CLAVE_SIMPLE"))
+                .andExpect(jsonPath("$.data[0].nombre").value("Nombre CLAVE_SIMPLE"))
+                .andExpect(jsonPath("$.data[0].tipoEstrategia").value("CLAVE_SIMPLE"))
+                .andExpect(jsonPath("$.data[0].activa").value(true))
+                .andExpect(jsonPath("$.data[0].requiereRevisionManual").value(false))
+                .andExpect(jsonPath("$.data[0].permiteBaremo").value(true))
+                .andExpect(jsonPath("$.data[0].fechaCreacion").exists())
+                .andExpect(jsonPath("$.data[0].implemented").value(true))
+                .andExpect(jsonPath("$.data[1].codigo").value("LIKERT_ESCALA"))
+                .andExpect(jsonPath("$.data[1].implemented").value(false));
+    }
+
+    private static EstrategiaCalificacion strategy(short id, String code, TipoEstrategiaCalificacion type) {
+        EstrategiaCalificacion strategy = new EstrategiaCalificacion();
+        strategy.setId(id);
+        strategy.setCodigo(code);
+        strategy.setNombre("Nombre " + code);
+        strategy.setTipoEstrategia(type);
+        strategy.setActiva(true);
+        strategy.setRequiereRevisionManual(false);
+        strategy.setPermiteBaremo(true);
+        strategy.setFechaCreacion(java.time.LocalDateTime.of(2026, 6, 1, 8, 0));
+        return strategy;
     }
 
     private String token(String permission) {

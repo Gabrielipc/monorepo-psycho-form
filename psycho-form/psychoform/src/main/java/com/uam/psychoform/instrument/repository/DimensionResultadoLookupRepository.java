@@ -15,4 +15,14 @@ public interface DimensionResultadoLookupRepository extends JpaRepository<Dimens
             order by d.ordenPresentacion asc, d.id asc
             """)
     List<DimensionResultado> findActiveSubtestDimensionsByVersionId(Long versionTestId);
+
+    /** Dimensiones activas de la version (con o sin subtest), en orden de presentacion. */
+    @Query("""
+            select d from DimensionResultado d
+            left join fetch d.subtest
+            where d.versionTest.id = :versionTestId
+              and d.activa = true
+            order by d.ordenPresentacion asc, d.id asc
+            """)
+    List<DimensionResultado> findActiveByVersionId(Long versionTestId);
 }

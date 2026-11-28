@@ -17,4 +17,20 @@ public interface OpcionItemLookupRepository extends JpaRepository<OpcionItem, Lo
             order by opcion.item.numeroOrden asc, opcion.numeroOrden asc
             """)
     List<OpcionItem> findByItemIdInAndEstadoOrderByItemAndOptionOrder(Collection<Long> itemIds, EstadoGeneral estado);
+
+    /** Opciones (de cualquier estado) de los items activos de subtests activos de la version. */
+    @Query("""
+            select opcion from OpcionItem opcion
+            join fetch opcion.item item
+            join item.subtest subtest
+            where subtest.versionTest.id = :versionTestId
+              and subtest.estado = :estadoItem
+              and item.estado = :estadoItem
+            order by opcion.item.id asc, opcion.numeroOrden asc, opcion.id asc
+            """)
+    List<OpcionItem> findByVersionIdAndItemEstado(Long versionTestId, EstadoGeneral estadoItem);
+
+    default List<OpcionItem> findOfActiveItemsByVersionId(Long versionTestId) {
+        return findByVersionIdAndItemEstado(versionTestId, EstadoGeneral.ACTIVO);
+    }
 }
