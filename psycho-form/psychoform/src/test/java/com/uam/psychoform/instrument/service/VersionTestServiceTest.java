@@ -51,24 +51,109 @@ class VersionTestServiceTest {
 
     @Test
     void aprobarVersionRequierePermisoTestPublicarYUsaActorActual() throws Exception {
-        VersionTestRepository repository = Mockito.mock(VersionTestRepository.class);
-        UsuarioRepository usuarios = Mockito.mock(UsuarioRepository.class);
-        CurrentActor currentActor = Mockito.mock(CurrentActor.class);
-        UUID actorId = UUID.randomUUID();
-        Usuario actor = new Usuario();
-        actor.setId(actorId);
-        VersionTest version = new VersionTest();
-        version.setEstado(EstadoVersionTest.EN_REVISION);
-        when(repository.findByIdForUpdate(7L)).thenReturn(Optional.of(version));
-        when(currentActor.usuarioId()).thenReturn(actorId);
-        when(usuarios.findById(actorId)).thenReturn(Optional.of(actor));
-        VersionTestService service = new VersionTestService(repository, usuarios, currentActor, java.time.Clock.systemUTC());
+        Escenario e = escenarioAprobacion(registry(fake("FAKE", List.of())), "FAKE", EstadoVersionTest.EN_REVISION,
+                configuracion(true));
 
         Method method = VersionTestService.class.getMethod("approveVersion", long.class);
 
         assertThat(method.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAuthority('PERM_TEST_PUBLICAR')");
-        assertThat(service.approveVersion(7L).getAprobadoPor()).isSameAs(actor);
-        assertThat(version.getEstado()).isEqualTo(EstadoVersionTest.APROBADO);
+        assertThat(e.service.approveVersion(13L).getAprobadoPor()).isNotNull();
+        assertThat(e.version.getEstado()).isEqualTo(EstadoVersionTest.APROBADO);
+        Mockito.verify(e.loader).loadConfiguration(13L, ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE);
+    }
+
+    @Test
+    void aprobarVersionConProblemasDeConfiguracionResponde409YNoCambiaDeEstado() {
+        Escenario e = escenarioAprobacion(registry(fake("FAKE",
+                List.of("Subtest FI: el item FI-03 no tiene clave de respuesta", "Otro problema"))), "FAKE",
+                EstadoVersionTest.BORRADOR, configuracion(true));
+
+        assertThatThrownBy(() -> e.service.approveVersion(13L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("La version no se puede aprobar: Subtest FI: el item FI-03 no tiene clave de respuesta; "
+                        + "Otro problema");
+
+        assertThat(e.version.getEstado()).isEqualTo(EstadoVersionTest.BORRADOR);
+        Mockito.verify(e.repository, Mockito.never()).save(e.version);
+    }
+
+    @Test
+    void aprobarVersionSinReglasActivasResponde409() {
+        Escenario e = escenarioAprobacion(registry(fake("FAKE", List.of())), "FAKE", EstadoVersionTest.BORRADOR,
+                configuracion(false));
+
+        assertThatThrownBy(() -> e.service.approveVersion(13L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("reglas de calificación activas");
+        assertThat(e.version.getEstado()).isEqualTo(EstadoVersionTest.BORRADOR);
+    }
+
+    @Test
+    void aprobarVersionSinImplementacionDeLaEstrategiaResponde409() {
+        Escenario e = escenarioAprobacion(registry(fake("FAKE", List.of())), "OTRA", EstadoVersionTest.BORRADOR,
+                configuracion(true));
+
+        assertThatThrownBy(() -> e.service.approveVersion(13L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("La estrategia OTRA no tiene implementacion registrada");
+        assertThat(e.version.getEstado()).isEqualTo(EstadoVersionTest.BORRADOR);
+    }
+
+    @Test
+    void aprobarVersionConClaveDuplicadaPropagaElError() {
+        Escenario e = escenarioAprobacion(registry(fake("FAKE", List.of())), "FAKE", EstadoVersionTest.BORRADOR,
+                configuracion(true));
+        when(e.loader.loadConfiguration(13L, ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE))
+                .thenThrow(new IllegalStateException("El item FI-01 tiene mas de una clave de respuesta oficial"));
+
+        assertThatThrownBy(() -> e.service.approveVersion(13L))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("mas de una clave");
+        assertThat(e.version.getEstado()).isEqualTo(EstadoVersionTest.BORRADOR);
+    }
+
+    @Test
+    void devolverABorradorSoloDesdeAprobadoYLimpiaLaAprobacion() throws Exception {
+        Escenario e = escenarioAprobacion(registry(fake("FAKE", List.of())), "FAKE", EstadoVersionTest.APROBADO,
+                configuracion(true));
+        e.version.setAprobadoPor(new Usuario());
+        e.version.setAprobadoEn(LocalDateTime.now());
+
+        Method method = VersionTestService.class.getMethod("returnToDraft", long.class);
+        VersionTest result = e.service.returnToDraft(13L);
+
+        assertThat(method.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAuthority('PERM_TEST_PUBLICAR')");
+        assertThat(method.getAnnotation(Transactional.class)).isNotNull();
+        assertThat(result.getEstado()).isEqualTo(EstadoVersionTest.BORRADOR);
+        assertThat(result.getAprobadoPor()).isNull();
+        assertThat(result.getAprobadoEn()).isNull();
+        Mockito.verify(e.repository).save(e.version);
+    }
+
+    @Test
+    void devolverABorradorRechazaCualquierOtroEstado() {
+        for (EstadoVersionTest estado : List.of(EstadoVersionTest.BORRADOR, EstadoVersionTest.EN_REVISION,
+                EstadoVersionTest.PUBLICADO, EstadoVersionTest.RETIRADO)) {
+            Escenario e = escenarioAprobacion(registry(fake("FAKE", List.of())), "FAKE", estado, configuracion(true));
+
+            assertThatThrownBy(() -> e.service.returnToDraft(13L)).isInstanceOf(IllegalStateException.class);
+            assertThat(e.version.getEstado()).isEqualTo(estado);
+        }
+    }
+
+    private static ScoringConfiguration configuracion(boolean conReglas) {
+        ScoringConfiguration.RuleInfo rule = new ScoringConfiguration.RuleInfo(1L, null, null,
+                com.uam.psychoform.instrument.model.TipoReglaCalificacion.CLAVE_ITEM, 1, null);
+        return new ScoringConfiguration(13L, "FAKE", List.of(), List.of(), conReglas ? List.of(rule) : List.of(),
+                java.util.Map.of(), List.of(), List.of());
+    }
+
+    private Escenario escenarioAprobacion(ScoringStrategyRegistry registry, String strategyCode,
+            EstadoVersionTest estado, ScoringConfiguration configuration) {
+        Escenario e = escenarioPublicacion(registry, strategyCode);
+        e.version.setEstado(estado);
+        when(e.loader.loadConfiguration(13L, ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE))
+                .thenReturn(configuration);
+        return e;
     }
 
     @Test

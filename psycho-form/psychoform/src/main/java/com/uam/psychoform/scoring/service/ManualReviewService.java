@@ -77,6 +77,7 @@ public class ManualReviewService {
     public PendingReviewView createPendingForAnswer(Long answerId) {
         RespuestaItem answer = answers.findById(answerId)
                 .orElseThrow(() -> new EntityNotFoundException("Respuesta no encontrada: " + answerId));
+        lockAttempt(answer.getIntento().getId());
         RevisionManualRespuesta existing = reviews.findByRespuestaId(answerId).orElse(null);
         if (existing != null) {
             return toView(existing);
@@ -85,9 +86,9 @@ public class ManualReviewService {
         review.setRespuesta(answer);
         review.setEstado(EstadoRevisionManual.PENDIENTE);
         review.setCreadoEn(LocalDateTime.now(clock));
-        reviews.save(review);
+        reviews.saveAndFlush(review);
         answer.setRequiereRevisionManual(true);
-        answers.save(answer);
+        answers.saveAndFlush(answer);
         // Si el intento ya esta calificado, el resultado debe reflejar la nueva revision pendiente.
         results.findByIntentoId(answer.getIntento().getId()).ifPresent(recalculator::recalculate);
         return toView(review);
@@ -100,6 +101,8 @@ public class ManualReviewService {
                 .orElseThrow(() -> new EntityNotFoundException("Revision no encontrada: " + reviewId));
         RespuestaItem answer = review.getRespuesta();
         Long attemptId = answer.getIntento().getId();
+        // Serializa por intento: cada resolucion recalcula el total completo. El bloqueo dura toda la transaccion.
+        lockAttempt(attemptId);
         BigDecimal score = command.score();
         if (score != null && score.signum() < 0) {
             throw new IllegalArgumentException("El puntaje no puede ser negativo");
@@ -107,9 +110,6 @@ public class ManualReviewService {
         if (command.approved() && score == null) {
             throw new IllegalArgumentException("El puntaje es obligatorio para aprobar la revision");
         }
-        // Serializa las resoluciones de un mismo intento: cada una recalcula el total completo.
-        attempts.findByIdForUpdate(attemptId).orElseThrow(
-                () -> new EntityNotFoundException("Intento no encontrado: " + attemptId));
         Resultado result = results.findByIntentoId(attemptId).orElseThrow(
                 () -> new IllegalStateException("El intento aun no tiene resultado calificado"));
         CalificacionRespuesta grading = gradings.findByResultadoId(result.getId()).stream()
@@ -124,7 +124,7 @@ public class ManualReviewService {
         review.setComentario(command.comment());
         review.setRevisadoPor(currentUser());
         review.setRevisadoEn(LocalDateTime.now(clock));
-        reviews.save(review);
+        reviews.saveAndFlush(review);
 
         // La calificacion, los totales y las dimensiones los recalcula la estrategia de la version.
         recalculator.recalculate(result);
@@ -132,6 +132,11 @@ public class ManualReviewService {
                 String.valueOf(reviewId), null,
                 "{\"score\":" + command.score() + ",\"approved\":" + command.approved() + "}", null, null));
         return toView(review);
+    }
+
+    private void lockAttempt(Long attemptId) {
+        attempts.findByIdForUpdate(attemptId).orElseThrow(
+                () -> new EntityNotFoundException("Intento no encontrado: " + attemptId));
     }
 
     private void validateScoreAgainstKey(BigDecimal score, CalificacionRespuesta grading, RespuestaItem answer) {

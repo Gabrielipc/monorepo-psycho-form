@@ -77,12 +77,34 @@ public class VersionTestService {
         if (version.getEstado() != EstadoVersionTest.BORRADOR && version.getEstado() != EstadoVersionTest.EN_REVISION) {
             throw new IllegalStateException("La versión no puede aprobarse en su estado actual");
         }
+        if (version.getEstrategiaCalificacion() == null) {
+            throw new IllegalStateException("La versión requiere estrategia de calificación para aprobarse");
+        }
+        // Se valida lo que se publicaria, para no dejar la version atrapada en APROBADO (no editable).
+        validateScoringConfiguration(version, ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE,
+                "aprobar", true);
         UUID actorId = currentActor.usuarioId();
         Usuario actor = usuarios.findById(actorId)
                 .orElseThrow(() -> new EntityNotFoundException("Usuario autenticado no encontrado: " + actorId));
         version.setEstado(EstadoVersionTest.APROBADO);
         version.setAprobadoPor(actor);
         version.setAprobadoEn(LocalDateTime.now(clock));
+        repository.save(version);
+        return version;
+    }
+
+    /** Devuelve una version APROBADO a BORRADOR para corregirla; limpia la aprobacion. */
+    @Transactional
+    @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
+    public VersionTest returnToDraft(long versionId) {
+        VersionTest version = repository.findByIdForUpdate(versionId)
+                .orElseThrow(() -> new EntityNotFoundException("Versión no encontrada: " + versionId));
+        if (version.getEstado() != EstadoVersionTest.APROBADO) {
+            throw new IllegalStateException("Solo una versión aprobada puede devolverse a borrador");
+        }
+        version.setEstado(EstadoVersionTest.BORRADOR);
+        version.setAprobadoPor(null);
+        version.setAprobadoEn(null);
         repository.save(version);
         return version;
     }
@@ -107,7 +129,7 @@ public class VersionTestService {
             throw new IllegalStateException("La versión requiere reglas de calificación activas para publicarse");
         }
         baremos.publishActiveByVersionId(versionId, actor, approvedAt);
-        validateScoringConfiguration(version);
+        validateScoringConfiguration(version, ScoringContextLoader.ConfigurationScope.OFFICIAL, "publicar", false);
         version.setEstado(EstadoVersionTest.PUBLICADO);
         version.setPublicadoEn(LocalDateTime.now(clock));
         repository.save(version);
@@ -115,15 +137,23 @@ public class VersionTestService {
     }
 
     /**
-     * La estrategia de la version debe estar implementada y aceptar su configuracion. Corre despues de promover reglas y
-     * baremos, para ver la configuracion oficial, y antes de marcar la version como PUBLICADO (misma transaccion).
+     * La estrategia de la version debe estar implementada y aceptar su configuracion. Al publicar corre despues de
+     * promover reglas y baremos (configuracion oficial) y antes de marcar PUBLICADO; al aprobar evalua las reglas que se
+     * publicarian. Ambos casos en la misma transaccion que el cambio de estado.
      */
-    private void validateScoringConfiguration(VersionTest version) {
+    private void validateScoringConfiguration(VersionTest version, ScoringContextLoader.ConfigurationScope scope,
+            String action, boolean requireRules) {
         ScoringStrategy strategy = strategies.require(version.getEstrategiaCalificacion());
-        ScoringConfiguration configuration = scoringLoader.loadConfiguration(version.getId());
+        ScoringConfiguration configuration = scope == ScoringContextLoader.ConfigurationScope.OFFICIAL
+                ? scoringLoader.loadConfiguration(version.getId())
+                : scoringLoader.loadConfiguration(version.getId(), scope);
+        if (requireRules && configuration.rules().isEmpty()) {
+            throw new IllegalStateException("La versión requiere reglas de calificación activas para publicarse");
+        }
         List<String> problems = strategy.validateConfiguration(configuration);
         if (!problems.isEmpty()) {
-            throw new IllegalStateException("La version no se puede publicar: " + String.join("; ", problems));
+            throw new IllegalStateException(
+                    "La version no se puede " + action + ": " + String.join("; ", problems));
         }
     }
 }

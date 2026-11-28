@@ -91,12 +91,13 @@ class ScoringServiceTest {
     void scoreAttemptRetornaResultadoExistenteSinDuplicar() {
         Resultado existente = new Resultado();
         existente.setId(70L);
+        when(intentos.findByIdForUpdate(7L)).thenReturn(Optional.of(new IntentoTest()));
         when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(existente));
 
         assertThat(service.scoreAttempt(7L)).isSameAs(existente);
 
         verify(resultados, never()).save(Mockito.any());
-        verify(intentos, never()).findByIdForUpdate(Mockito.anyLong());
+        verify(intentos).findByIdForUpdate(7L);
         verify(loader, never()).load(Mockito.any());
     }
 
@@ -106,6 +107,7 @@ class ScoringServiceTest {
         RespuestaItem r2 = respuesta(32L);
         Resultado existente = new Resultado();
         existente.setId(70L);
+        when(intentos.findByIdForUpdate(7L)).thenReturn(Optional.of(new IntentoTest()));
         when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(existente));
         when(calificaciones.findByResultadoId(70L)).thenReturn(List.of(calificacionManual(r1), calificacionManual(r2)));
         when(revisiones.findByRespuestaIdIn(List.of(31L, 32L))).thenReturn(List.of(
@@ -122,6 +124,7 @@ class ScoringServiceTest {
         RespuestaItem r2 = respuesta(32L);
         Resultado existente = new Resultado();
         existente.setId(70L);
+        when(intentos.findByIdForUpdate(7L)).thenReturn(Optional.of(new IntentoTest()));
         when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(existente));
         when(calificaciones.findByResultadoId(70L)).thenReturn(List.of(calificacionManual(r1), calificacionManual(r2)));
         when(revisiones.findByRespuestaIdIn(List.of(31L, 32L)))

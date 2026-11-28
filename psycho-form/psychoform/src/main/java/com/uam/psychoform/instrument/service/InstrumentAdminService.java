@@ -262,7 +262,7 @@ public class InstrumentAdminService {
         rule.setEstrategiaCalificacion(find(EstrategiaCalificacion.class, command.strategyId()));
         rule.setTipoRegla(command.ruleType());
         rule.setPrioridad(command.priority() == null ? 1 : command.priority());
-        rule.setActiva(true);
+        rule.setActiva(command.active() == null || command.active());
         rule.setEstado(EstadoConfiguracion.BORRADOR);
         rule.setParametros(validParameters(command.parametersJson()));
         rule.setObservacion(command.observation());
@@ -299,6 +299,9 @@ public class InstrumentAdminService {
         rule.setPrioridad(command.priority() == null ? 1 : command.priority());
         rule.setParametros(validParameters(command.parametersJson()));
         rule.setObservacion(command.observation());
+        if (command.active() != null) {
+            rule.setActiva(command.active());
+        }
         return rule;
     }
 
@@ -1558,7 +1561,7 @@ public class InstrumentAdminService {
     }
 
     public record ScoringRuleCommand(Short strategyId, TipoReglaCalificacion ruleType, Long itemId, Integer priority,
-            String parametersJson, String observation) {
+            String parametersJson, String observation, Boolean active) {
     }
 
     public record AnswerKeyCommand(Long ruleId, Long correctOptionId, String expectedText, BigDecimal expectedNumber,

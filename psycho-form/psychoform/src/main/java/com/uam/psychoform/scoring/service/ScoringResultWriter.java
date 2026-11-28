@@ -23,6 +23,7 @@ import com.uam.psychoform.scoring.service.strategy.ScoringOutcome;
 import com.uam.psychoform.security.model.Usuario;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -65,7 +66,8 @@ public class ScoringResultWriter {
 
     /** Crea el resultado del intento con todas sus filas. */
     public Resultado write(IntentoTest intento, EstrategiaCalificacion estrategia, Usuario actor,
-            ScoringOutcome outcome, ScoringContext context) {
+            ScoringOutcome rawOutcome, ScoringContext context) {
+        ScoringOutcome outcome = normalize(rawOutcome);
         Resultado resultado = new Resultado();
         resultado.setIntento(intento);
         resultado.setEstrategiaCalificacion(estrategia);
@@ -99,7 +101,8 @@ public class ScoringResultWriter {
      * Recalcula un resultado existente actualizando en sitio: totales, calificaciones (por respuesta) y dimensiones (por
      * dimension) se actualizan, insertan o borran segun el nuevo resultado. No cambia el intento del resultado.
      */
-    public void reconcile(Resultado existing, ScoringOutcome outcome, ScoringContext context) {
+    public void reconcile(Resultado existing, ScoringOutcome rawOutcome, ScoringContext context) {
+        ScoringOutcome outcome = normalize(rawOutcome);
         applyTotals(existing, outcome);
         resultados.save(existing);
 
@@ -164,6 +167,26 @@ public class ScoringResultWriter {
             }
         }
         return resultado;
+    }
+
+    /**
+     * Normaliza todos los puntajes a escala 2 (HALF_UP): el baremo se resuelve con el mismo valor que se persiste.
+     */
+    static ScoringOutcome normalize(ScoringOutcome outcome) {
+        List<ItemScore> items = outcome.items().stream()
+                .map(item -> new ItemScore(item.answerId(), item.itemId(), item.ruleId(), item.optionId(),
+                        scale(item.score()), item.correct(), item.pendingManualReview(), item.dimensionId(),
+                        item.note()))
+                .toList();
+        List<DimensionScore> dimensions = outcome.dimensions().stream()
+                .map(dimension -> new DimensionScore(dimension.dimensionId(), scale(dimension.directScore()),
+                        scale(dimension.transformedScore()), dimension.note()))
+                .toList();
+        return new ScoringOutcome(scale(outcome.totalDirectScore()), items, dimensions);
+    }
+
+    private static BigDecimal scale(BigDecimal value) {
+        return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
 
     private void applyTotals(Resultado resultado, ScoringOutcome outcome) {

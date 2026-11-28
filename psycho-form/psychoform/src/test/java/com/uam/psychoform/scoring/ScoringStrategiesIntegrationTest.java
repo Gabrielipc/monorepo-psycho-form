@@ -135,6 +135,28 @@ class ScoringStrategiesIntegrationTest {
     }
 
     @Test
+    void elAlcanceCandidatoAPublicacionVeLasReglasEnBorradorYElOficialNo() {
+        long testId = InstrumentVersionFixture.createTest(jdbc, "candidato");
+        long versionId = InstrumentVersionFixture.createDraftVersion(jdbc, testId, "1.0");
+        InstrumentVersionFixture.seedFullContent(jdbc, versionId);
+
+        ScoringConfiguration official = loader.loadConfiguration(versionId);
+        ScoringConfiguration candidate = loader.loadConfiguration(versionId,
+                ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE);
+
+        assertThat(official.rules()).isEmpty();
+        assertThat(official.keysByItem()).isEmpty();
+        assertThat(candidate.rules()).isNotEmpty();
+        assertThat(candidate.keysByItem()).hasSize(5);
+        assertThat(candidate.matrix()).hasSize(2);
+        assertThat(registry.find("CLAVE_SIMPLE").orElseThrow().validateConfiguration(candidate)).isEmpty();
+
+        jdbc.update("update regla_calificacion set estado = 'RETIRADO' where version_test_id = ?", versionId);
+        assertThat(loader.loadConfiguration(versionId,
+                ScoringContextLoader.ConfigurationScope.PUBLICATION_CANDIDATE).rules()).isEmpty();
+    }
+
+    @Test
     void unItemConDosClavesOficialesImpideCargarLaConfiguracion() {
         Seeded seeded = seed(true);
 

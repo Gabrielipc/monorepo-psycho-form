@@ -1,6 +1,7 @@
 package com.uam.psychoform.scoring.service.strategy;
 
 import com.uam.psychoform.instrument.model.TipoEstrategiaCalificacion;
+import com.uam.psychoform.scoring.service.ClaveCorrectnessEvaluator;
 import com.uam.psychoform.instrument.model.TipoRespuesta;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -8,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
@@ -64,6 +66,12 @@ public class ClaveSimpleScoringStrategy implements ScoringStrategy {
         }
         String prefix = "Subtest " + subtestLabel(configuration, item.subtestId()) + ": el item " + item.code();
         TipoRespuesta type = item.answerType();
+        Optional<String> shape = shapeProblem(prefix, item, key, type);
+        return shape.isPresent() ? shape : unreachableOptionsProblem(prefix, item, key, type);
+    }
+
+    private static Optional<String> shapeProblem(String prefix, ScoringConfiguration.ItemInfo item, AnswerKey key,
+            TipoRespuesta type) {
         return switch (type) {
             case NUMERICA -> key.expectedNumber() == null
                     ? Optional.of(prefix + " es NUMERICA y su clave no tiene valor numerico esperado")
@@ -79,6 +87,38 @@ public class ClaveSimpleScoringStrategy implements ScoringStrategy {
                     ? Optional.of(prefix + " es " + type + " y su clave no tiene opcion correcta")
                     : Optional.empty();
         };
+    }
+
+    /**
+     * La fuente efectiva de opciones correctas (misma precedencia que {@link ClaveCorrectnessEvaluator}) solo puede
+     * referenciar opciones activas del item; si no, la clave es imposible de acertar.
+     */
+    private static Optional<String> unreachableOptionsProblem(String prefix, ScoringConfiguration.ItemInfo item,
+            AnswerKey key, TipoRespuesta type) {
+        List<ScoringConfiguration.OptionInfo> active = item.options().stream()
+                .filter(ScoringConfiguration.OptionInfo::active).toList();
+        List<String> invalid = new ArrayList<>();
+        if (type == TipoRespuesta.OPCION_MULTIPLE && !key.optionSetIds().isEmpty()) {
+            Set<Long> activeIds = active.stream().map(ScoringConfiguration.OptionInfo::id).collect(Collectors.toSet());
+            key.optionSetIds().stream().filter(id -> !activeIds.contains(id)).sorted()
+                    .forEach(id -> invalid.add(String.valueOf(id)));
+        } else if (type == TipoRespuesta.OPCION_MULTIPLE
+                && !ClaveCorrectnessEvaluator.parseCodes(key.expectedText()).isEmpty()) {
+            Set<String> activeCodes = active.stream()
+                    .map(option -> ClaveCorrectnessEvaluator.normalizeCode(option.code()))
+                    .collect(Collectors.toSet());
+            ClaveCorrectnessEvaluator.parseCodes(key.expectedText()).stream()
+                    .filter(code -> !activeCodes.contains(code)).sorted().forEach(invalid::add);
+        } else if (key.correctOptionId() != null && type != TipoRespuesta.NUMERICA
+                && type != TipoRespuesta.TEXTO_ABIERTO) {
+            boolean exists = active.stream().anyMatch(option -> option.id() == key.correctOptionId());
+            if (!exists) {
+                invalid.add(String.valueOf(key.correctOptionId()));
+            }
+        }
+        return invalid.isEmpty() ? Optional.empty()
+                : Optional.of(prefix + " tiene en su clave opciones inexistentes o inactivas: "
+                        + String.join(", ", invalid));
     }
 
     private static String subtestLabel(ScoringConfiguration configuration, long subtestId) {

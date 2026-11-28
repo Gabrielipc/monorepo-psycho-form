@@ -97,16 +97,17 @@ class ManualReviewServiceTest {
     void createPendingForAnswerMarcaRespuestaYCreaRevisionPendiente() {
         RespuestaItem answer = answerGraph(44L);
         when(answers.findById(44L)).thenReturn(Optional.of(answer));
+        when(attempts.findByIdForUpdate(33L)).thenReturn(Optional.of(answer.getIntento()));
 
         ManualReviewService.PendingReviewView view = service.createPendingForAnswer(44L);
 
         assertThat(answer.getRequiereRevisionManual()).isTrue();
         assertThat(view.answerId()).isEqualTo(44L);
         assertThat(view.status()).isEqualTo("PENDIENTE");
-        verify(reviews).save(Mockito.argThat(review -> review.getRespuesta() == answer
+        verify(reviews).saveAndFlush(Mockito.argThat(review -> review.getRespuesta() == answer
                 && review.getEstado() == EstadoRevisionManual.PENDIENTE
                 && review.getCreadoEn().equals(CLOCK.instant().atZone(ZoneOffset.UTC).toLocalDateTime())));
-        verify(answers).save(answer);
+        verify(answers).saveAndFlush(answer);
     }
 
     @Test
@@ -114,6 +115,7 @@ class ManualReviewServiceTest {
         Escenario e = escenario(1);
         RespuestaItem answer = e.gradingList.get(0).getRespuesta();
         when(answers.findById(answer.getId())).thenReturn(Optional.of(answer));
+        when(attempts.findByIdForUpdate(33L)).thenReturn(Optional.of(answer.getIntento()));
 
         service.createPendingForAnswer(answer.getId());
 
@@ -133,7 +135,7 @@ class ManualReviewServiceTest {
         assertThat(view.status()).isEqualTo("REVISADO");
         assertThat(e.reviews.get(0).getPuntajeAsignado()).isEqualByComparingTo("4.50");
         assertThat(e.reviews.get(0).getRevisadoPor()).isSameAs(e.reviewer);
-        verify(reviews).save(e.reviews.get(0));
+        verify(reviews).saveAndFlush(e.reviews.get(0));
         verify(audit).recordTrusted(Mockito.argThat(event -> event.action().equals("REVISION_MANUAL_GUARDADA")
                 && event.entity().equals("revision_manual_respuesta")
                 && event.entityId().equals(String.valueOf(e.reviews.get(0).getId()))));
@@ -258,6 +260,7 @@ class ManualReviewServiceTest {
         existing.setEstado(EstadoRevisionManual.REVISADO);
         existing.setCreadoEn(CLOCK.instant().atZone(ZoneOffset.UTC).toLocalDateTime());
         when(answers.findById(44L)).thenReturn(Optional.of(answer));
+        when(attempts.findByIdForUpdate(33L)).thenReturn(Optional.of(answer.getIntento()));
         when(reviews.findByRespuestaId(44L)).thenReturn(Optional.of(existing));
 
         assertThat(service.createPendingForAnswer(44L).status()).isEqualTo("REVISADO");

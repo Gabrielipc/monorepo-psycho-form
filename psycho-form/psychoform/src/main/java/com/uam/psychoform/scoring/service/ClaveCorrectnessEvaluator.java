@@ -171,7 +171,7 @@ public final class ClaveCorrectnessEvaluator {
     }
 
     /** Codigos separados por coma: recorte, mayusculas, sin vacios ni duplicados. */
-    static Set<String> parseCodes(String raw) {
+    public static Set<String> parseCodes(String raw) {
         if (raw == null || raw.isBlank()) {
             return Set.of();
         }
@@ -181,7 +181,7 @@ public final class ClaveCorrectnessEvaluator {
                 .collect(Collectors.toCollection(HashSet::new));
     }
 
-    private static String normalizeCode(String code) {
+    public static String normalizeCode(String code) {
         return code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
     }
 

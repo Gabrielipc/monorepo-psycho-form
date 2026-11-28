@@ -59,13 +59,13 @@ class InstrumentAdminServiceScoringRuleParametersTest {
 
     private InstrumentAdminService.ScoringRuleCommand command(String json) {
         return new InstrumentAdminService.ScoringRuleCommand((short) 1, TipoReglaCalificacion.CLAVE_ITEM, null, 1, json,
-                null);
+                null, null);
     }
 
     @Test
     void parametrosNuloSeGuardaComoObjetoVacio() {
-        assertThat(service.createScoringRule(5L, command(null)).getParametros()).isEqualTo("{}");
-        assertThat(service.updateScoringRule(9L, command(null)).getParametros()).isEqualTo("{}");
+        assertThat(service.createScoringRule(5L, command((String) null)).getParametros()).isEqualTo("{}");
+        assertThat(service.updateScoringRule(9L, command((String) null)).getParametros()).isEqualTo("{}");
     }
 
     @Test
@@ -89,5 +89,25 @@ class InstrumentAdminServiceScoringRuleParametersTest {
                     .hasMessage("parametros debe ser un objeto JSON valido");
         }
         verify(em, never()).persist(Mockito.any(ReglaCalificacion.class));
+    }
+
+    private InstrumentAdminService.ScoringRuleCommand commandActive(Boolean active) {
+        return new InstrumentAdminService.ScoringRuleCommand((short) 1, TipoReglaCalificacion.CLAVE_ITEM, null, 1, null,
+                null, active);
+    }
+
+    @Test
+    void activaNulaCreaActivaYConservaElValorAlActualizar() {
+        assertThat(service.createScoringRule(5L, commandActive(null)).getActiva()).isTrue();
+        ReglaCalificacion inactiva = service.updateScoringRule(9L, commandActive(false));
+        assertThat(inactiva.getActiva()).isFalse();
+        // null conserva el valor actual (inactiva)
+        assertThat(service.updateScoringRule(9L, commandActive(null)).getActiva()).isFalse();
+        assertThat(service.updateScoringRule(9L, commandActive(true)).getActiva()).isTrue();
+    }
+
+    @Test
+    void crearConActivaFalsaGuardaLaReglaInactiva() {
+        assertThat(service.createScoringRule(5L, commandActive(false)).getActiva()).isFalse();
     }
 }

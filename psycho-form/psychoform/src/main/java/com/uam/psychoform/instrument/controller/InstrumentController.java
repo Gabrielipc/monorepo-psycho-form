@@ -79,6 +79,12 @@ public class InstrumentController {
         return ApiResponse.ok(EntityView.of(versions.approveVersion(id)));
     }
 
+    @PostMapping("/test-versions/{id}/return-to-draft")
+    @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
+    public ApiResponse<?> returnToDraft(@PathVariable Long id) {
+        return ApiResponse.ok(EntityView.of(versions.returnToDraft(id)));
+    }
+
     @PostMapping("/test-versions/{id}/publish")
     @PreAuthorize(SecurityPermissions.TEST_PUBLICAR)
     public ApiResponse<?> publish(@PathVariable Long id) {
@@ -295,7 +301,7 @@ public class InstrumentController {
     public ApiResponse<?> scoringRule(@PathVariable Long id, @Valid @RequestBody ScoringRuleRequest request) {
         return ApiResponse.ok(EntityView.of(admin.createScoringRule(id,
                 new InstrumentAdminService.ScoringRuleCommand(request.strategyId(), request.ruleType(), request.itemId(),
-                        request.priority(), request.parametersJson(), request.observation()))));
+                        request.priority(), request.parametersJson(), request.observation(), request.active()))));
     }
 
     @PatchMapping("/scoring-rules/{id}")
@@ -388,7 +394,7 @@ public class InstrumentController {
 
     private InstrumentAdminService.ScoringRuleCommand toCommand(ScoringRuleRequest request) {
         return new InstrumentAdminService.ScoringRuleCommand(request.strategyId(), request.ruleType(), request.itemId(),
-                request.priority(), request.parametersJson(), request.observation());
+                request.priority(), request.parametersJson(), request.observation(), request.active());
     }
 
     private InstrumentAdminService.AnswerKeyCommand toCommand(AnswerKeyRequest request) {

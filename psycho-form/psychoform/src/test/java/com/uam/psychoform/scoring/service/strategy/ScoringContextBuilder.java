@@ -91,6 +91,12 @@ public final class ScoringContextBuilder {
         return this;
     }
 
+    public ScoringContextBuilder inactiveOption(long itemId, long optionId, String code) {
+        ItemDraft item = items.get(itemId);
+        item.options.add(new ScoringConfiguration.OptionInfo(optionId, code, item.options.size() + 1, null, false));
+        return this;
+    }
+
     public ScoringContextBuilder rule(long id, Long subtestId, Long itemId, TipoReglaCalificacion type, int priority,
             String parametersJson) {
         rules.add(new ScoringConfiguration.RuleInfo(id, subtestId, itemId, type, priority, parse(parametersJson)));

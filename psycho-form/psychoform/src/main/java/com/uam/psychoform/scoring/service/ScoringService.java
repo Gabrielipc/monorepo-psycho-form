@@ -51,14 +51,15 @@ public class ScoringService {
     @Transactional
     @PreAuthorize(SecurityPermissions.CALIFICACION_EJECUTAR)
     public Resultado scoreAttempt(long intentoId) {
-        return resultados.findByIntentoId(intentoId)
-                .map(writer::ensurePendingReviews)
-                .orElseGet(() -> calculate(intentoId));
-    }
-
-    private Resultado calculate(long intentoId) {
+        // El bloqueo va primero: una segunda llamada concurrente espera y encuentra el resultado ya creado.
         IntentoTest intento = intentos.findByIdForUpdate(intentoId)
                 .orElseThrow(() -> new EntityNotFoundException("Intento no encontrado: " + intentoId));
+        return resultados.findByIntentoId(intentoId)
+                .map(writer::ensurePendingReviews)
+                .orElseGet(() -> calculate(intento));
+    }
+
+    private Resultado calculate(IntentoTest intento) {
         if (intento.getEstado() != EstadoIntento.COMPLETADO) {
             throw new IllegalStateException("El intento debe estar finalizado para calificar");
         }

@@ -331,9 +331,64 @@ class ClaveSimpleScoringStrategyTest {
         ScoringContextBuilder b = base()
                 .item(10L, 5L, "N-1", TipoRespuesta.NUMERICA).keyNumeric(10L, "1", null, "1.00")
                 .item(11L, 5L, "T-1", TipoRespuesta.TEXTO_ABIERTO).keyManual(11L, "5.00")
-                .item(12L, 5L, "M-1", TipoRespuesta.OPCION_MULTIPLE).keyCodes(12L, "A,B", "1.00")
-                .item(13L, 5L, "M-2", TipoRespuesta.OPCION_MULTIPLE).keyOptionSet(13L, "1.00", 1L, 2L)
+                .item(12L, 5L, "M-1", TipoRespuesta.OPCION_MULTIPLE).option(12L, 21L, "A").option(12L, 22L, "B")
+                .keyCodes(12L, "A,B", "1.00")
+                .item(13L, 5L, "M-2", TipoRespuesta.OPCION_MULTIPLE).option(13L, 1L, "A").option(13L, 2L, "B")
+                .keyOptionSet(13L, "1.00", 1L, 2L)
                 .item(14L, 5L, "U-1", TipoRespuesta.OPCION_UNICA).option(14L, 9L, "A").keyForOption(14L, 9L, "1.00");
+
+        assertThat(strategy.validateConfiguration(b.configuration())).isEmpty();
+    }
+
+    @Test
+    void validarDetectaCodigosEsperadosQueNoExistenEntreLasOpcionesActivas() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-03", TipoRespuesta.OPCION_MULTIPLE)
+                .option(10L, 1L, "A").option(10L, 2L, "B").inactiveOption(10L, 3L, "D")
+                .keyCodes(10L, " a, B ,C,d", "1.00");
+
+        assertThat(strategy.validateConfiguration(b.configuration())).containsExactly(
+                "Subtest FI: el item FI-03 tiene en su clave opciones inexistentes o inactivas: C, D");
+    }
+
+    @Test
+    void validarAceptaCodigosEsperadosNormalizadosComoLoHaceElEvaluador() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-03", TipoRespuesta.OPCION_MULTIPLE)
+                .option(10L, 1L, "A").option(10L, 2L, "b")
+                .keyCodes(10L, " a , B ", "1.00");
+
+        assertThat(strategy.validateConfiguration(b.configuration())).isEmpty();
+    }
+
+    @Test
+    void validarDetectaConjuntoDeOpcionesConIdsInexistentesOInactivos() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-03", TipoRespuesta.OPCION_MULTIPLE)
+                .option(10L, 1L, "A").inactiveOption(10L, 2L, "B")
+                .keyOptionSet(10L, "1.00", 1L, 2L, 99L);
+
+        assertThat(strategy.validateConfiguration(b.configuration())).containsExactly(
+                "Subtest FI: el item FI-03 tiene en su clave opciones inexistentes o inactivas: 2, 99");
+    }
+
+    @Test
+    void validarDetectaOpcionCorrectaInactivaOAjenaAlItem() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-01", TipoRespuesta.OPCION_UNICA)
+                .option(10L, 1L, "A").inactiveOption(10L, 2L, "B").keyForOption(10L, 2L, "1.00")
+                .item(11L, 5L, "FI-02", TipoRespuesta.VERDADERO_FALSO)
+                .option(11L, 3L, "V").keyForOption(11L, 1L, "1.00");
+
+        assertThat(strategy.validateConfiguration(b.configuration())).containsExactly(
+                "Subtest FI: el item FI-01 tiene en su clave opciones inexistentes o inactivas: 2",
+                "Subtest FI: el item FI-02 tiene en su clave opciones inexistentes o inactivas: 1");
+    }
+
+    @Test
+    void validarNoExigeOpcionesActivasALasClavesDeRevisionManual() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-01", TipoRespuesta.OPCION_UNICA).keyManual(10L, "5.00");
 
         assertThat(strategy.validateConfiguration(b.configuration())).isEmpty();
     }

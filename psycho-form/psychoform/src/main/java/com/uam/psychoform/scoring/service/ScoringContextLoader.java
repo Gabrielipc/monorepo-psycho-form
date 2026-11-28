@@ -10,6 +10,7 @@ import com.uam.psychoform.assessment.repository.OpcionSeleccionadaRespuestaRepos
 import com.uam.psychoform.assessment.repository.RespuestaItemRepository;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
 import com.uam.psychoform.instrument.model.DimensionResultado;
+import com.uam.psychoform.instrument.model.EstadoConfiguracion;
 import com.uam.psychoform.instrument.model.Item;
 import com.uam.psychoform.instrument.model.OpcionItem;
 import com.uam.psychoform.instrument.model.OpcionPuntajeDimension;
@@ -86,8 +87,32 @@ public class ScoringContextLoader {
         this.clock = clock;
     }
 
-    /** Configuracion de scoring de la version (solo lo que depende de ella, no del intento). */
+    /**
+     * Que reglas (y sus claves y matriz) forman la configuracion: las oficiales, con las que se califica, o las que se
+     * publicarian al aprobar o publicar la version.
+     */
+    public enum ConfigurationScope {
+        /** Reglas activas APROBADO o PUBLICADO: lo que usa la calificacion. */
+        OFFICIAL(List.of(EstadoConfiguracion.APROBADO, EstadoConfiguracion.PUBLICADO)),
+        /** Reglas activas en cualquier estado salvo RETIRADO: lo que {@code publishVersion} promoveria. */
+        PUBLICATION_CANDIDATE(List.of(EstadoConfiguracion.BORRADOR, EstadoConfiguracion.EN_REVISION,
+                EstadoConfiguracion.APROBADO, EstadoConfiguracion.PUBLICADO));
+
+        private final List<EstadoConfiguracion> ruleStates;
+
+        ConfigurationScope(List<EstadoConfiguracion> ruleStates) {
+            this.ruleStates = ruleStates;
+        }
+    }
+
+    /** Configuracion oficial de la version (solo lo que depende de ella, no del intento). */
     public ScoringConfiguration loadConfiguration(long versionId) {
+        return loadConfiguration(versionId, ConfigurationScope.OFFICIAL);
+    }
+
+    /** Configuracion de scoring de la version para el alcance indicado. */
+    public ScoringConfiguration loadConfiguration(long versionId, ConfigurationScope scope) {
+        List<EstadoConfiguracion> ruleStates = scope.ruleStates;
         VersionTest version = versions.findById(versionId)
                 .orElseThrow(() -> new EntityNotFoundException("Version no encontrada: " + versionId));
         String strategyCode = version.getEstrategiaCalificacion() == null ? null
@@ -113,11 +138,11 @@ public class ScoringContextLoader {
                         optionsByItem.getOrDefault(item.getId(), List.of())))
                 .toList();
 
-        List<ScoringConfiguration.RuleInfo> ruleInfos = rules.findOfficialByVersionId(versionId).stream()
+        List<ScoringConfiguration.RuleInfo> ruleInfos = rules.findActiveByVersionIdAndEstados(versionId, ruleStates).stream()
                 .map(ScoringContextLoader::toRuleInfo)
                 .toList();
 
-        Map<Long, AnswerKey> keysByItem = loadKeys(versionId, activeItems);
+        Map<Long, AnswerKey> keysByItem = loadKeys(versionId, activeItems, ruleStates);
 
         List<ScoringConfiguration.DimensionInfo> dimensionInfos = dimensions.findActiveByVersionId(versionId).stream()
                 .map(ScoringContextLoader::toDimensionInfo)
@@ -125,7 +150,7 @@ public class ScoringContextLoader {
         Set<Long> activeDimensionIds = dimensionInfos.stream().map(ScoringConfiguration.DimensionInfo::id)
                 .collect(Collectors.toSet());
         // Una fila de matriz hacia una dimension desactivada no aporta puntaje.
-        List<ScoringConfiguration.MatrixRow> matrixRows = matrix.findActiveOfficialByVersionId(versionId).stream()
+        List<ScoringConfiguration.MatrixRow> matrixRows = matrix.findActiveOfficialByVersionIdAndEstados(versionId, ruleStates).stream()
                 .filter(row -> activeDimensionIds.contains(row.getDimensionResultado().getId()))
                 .map(ScoringContextLoader::toMatrixRow)
                 .toList();
@@ -170,9 +195,10 @@ public class ScoringContextLoader {
         return new ScoringContext(configuration, attempt);
     }
 
-    private Map<Long, AnswerKey> loadKeys(long versionId, List<Item> activeItems) {
+    private Map<Long, AnswerKey> loadKeys(long versionId, List<Item> activeItems,
+            List<EstadoConfiguracion> ruleStates) {
         Set<Long> activeItemIds = activeItems.stream().map(Item::getId).collect(Collectors.toSet());
-        Map<Long, List<ClaveRespuesta>> keysByItem = keys.findOfficialKeysByVersionId(versionId).stream()
+        Map<Long, List<ClaveRespuesta>> keysByItem = keys.findOfficialKeysByVersionIdAndEstados(versionId, ruleStates).stream()
                 .filter(key -> activeItemIds.contains(key.getItem().getId()))
                 .collect(Collectors.groupingBy(key -> key.getItem().getId(), LinkedHashMap::new,
                         Collectors.toList()));
