@@ -352,6 +352,30 @@ class ClaveSimpleScoringStrategyTest {
     }
 
     @Test
+    void validarRechazaClaveMultipleConSoloSeparadores() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-03", TipoRespuesta.OPCION_MULTIPLE)
+                .option(10L, 1L, "A").option(10L, 2L, "B")
+                .key(new AnswerKey(70L, ScoringContextBuilder.DEFAULT_RULE_ID, 10L, null, " , ,", null, null,
+                        new java.math.BigDecimal("1.00"), false, null));
+
+        assertThat(strategy.validateConfiguration(b.configuration())).containsExactly(
+                "Subtest FI: el item FI-03 es OPCION_MULTIPLE y su clave no define las opciones correctas");
+    }
+
+    @Test
+    void validarAceptaSeparadoresSiCaeAUnaOpcionSingularValida() {
+        ScoringContextBuilder b = base()
+                .item(10L, 5L, "FI-03", TipoRespuesta.OPCION_MULTIPLE)
+                .option(10L, 1L, "A").option(10L, 2L, "B")
+                .key(new AnswerKey(70L, ScoringContextBuilder.DEFAULT_RULE_ID, 10L, 1L, ",", null, null,
+                        new java.math.BigDecimal("1.00"), false, null));
+
+        assertThat(strategy.validateConfiguration(b.configuration())).isEmpty();
+        assertThat(strategy.score(b.answerOptions(10L, 500L, 1L).context()).items().get(0).correct()).isTrue();
+    }
+
+    @Test
     void validarAceptaCodigosEsperadosNormalizadosComoLoHaceElEvaluador() {
         ScoringContextBuilder b = base()
                 .item(10L, 5L, "FI-03", TipoRespuesta.OPCION_MULTIPLE)

@@ -93,7 +93,7 @@ Si hay problemas, responde 409 `La version no se puede aprobar: …` y la versi�
 
 Al publicar (`POST /test-versions/{id}/publish`), el backend hace esto en una sola transacción:
 1. Exige que la versión esté `APROBADO` y tenga estrategia.
-2. Promueve a `PUBLICADO` las reglas y baremos activos. Las reglas inactivas pasan a `RETIRADO`.
+2. Promueve a `PUBLICADO` las reglas y baremos activos. Las reglas inactivas conservan su estado y no participan en la calificación.
 3. Comprueba que la estrategia de la versión **tenga implementación**. Si no la tiene, responde 409.
 4. Carga la configuración y ejecuta `validateConfiguration` de la estrategia. Si hay problemas, responde 409 con el mensaje `La version no se puede publicar: problema 1; problema 2` y no publica nada.
 5. Marca la versión como `PUBLICADO`.

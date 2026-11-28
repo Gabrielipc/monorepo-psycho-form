@@ -48,7 +48,7 @@ Solo se aceptan las claves con una única opción correcta o con revisión manua
 
 El mensaje lista subtest e ítem.
 
-**Impacto:** el usuario descubre el problema recién al pulsar publicar. `PublishDialog` muestra el texto del error, pero no lleva al ítem afectado.
+**Impacto:** el usuario descubre el problema recién al pulsar **aprobar** (o publicar). El diálogo muestra el texto del error, pero no lleva al ítem afectado.
 
 **A implementar:**
 - En `schema.ts`, un problema `MISSING_ANSWER_KEY` (severidad error, nodo del ítem) cuando la estrategia de la versión sea `CLAVE_SIMPLE`.
@@ -117,9 +117,9 @@ El mensaje lista subtest e ítem.
 
 **Backend disponible:**
 - `GET /scoring/strategies` incluye el campo `implemented`.
-- Publicar una versión cuya estrategia no tiene implementación responde 409.
+- Aprobar (y publicar) una versión cuya estrategia no tiene implementación responde 409.
 
-**Impacto:** el usuario puede elegir `LIKERT_ESCALA`, `MATRIZ_DIMENSIONAL` u otras sin implementación, y solo lo descubre al publicar.
+**Impacto:** el usuario puede elegir `LIKERT_ESCALA`, `MATRIZ_DIMENSIONAL` u otras sin implementación, y solo lo descubre al aprobar.
 
 **A implementar:**
 - Agregar `implemented` a `ScoringStrategyWireSchema` (el esquema es `.loose()`, así que hoy el campo se descarta sin error).

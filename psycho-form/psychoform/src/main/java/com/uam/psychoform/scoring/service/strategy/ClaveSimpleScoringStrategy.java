@@ -79,8 +79,9 @@ public class ClaveSimpleScoringStrategy implements ScoringStrategy {
             case TEXTO_ABIERTO -> key.expectedText() == null || key.expectedText().isBlank()
                     ? Optional.of(prefix + " es TEXTO_ABIERTO y su clave no tiene texto esperado")
                     : Optional.empty();
+            // Misma precedencia que el evaluador: un texto con solo separadores (",") no aporta codigos.
             case OPCION_MULTIPLE -> key.optionSetIds().isEmpty()
-                    && (key.expectedText() == null || key.expectedText().isBlank()) && key.correctOptionId() == null
+                    && ClaveCorrectnessEvaluator.parseCodes(key.expectedText()).isEmpty() && key.correctOptionId() == null
                     ? Optional.of(prefix + " es OPCION_MULTIPLE y su clave no define las opciones correctas")
                     : Optional.empty();
             case OPCION_UNICA, VERDADERO_FALSO -> key.correctOptionId() == null
