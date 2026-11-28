@@ -334,9 +334,7 @@ public class InstrumentController {
     @PostMapping("/baremos")
     @PreAuthorize(SecurityPermissions.BAREMO_CONFIGURAR)
     public ApiResponse<?> baremo(@Valid @RequestBody BaremoRequest request) {
-        return ApiResponse.ok(EntityView.of(admin.createBaremo(new InstrumentAdminService.BaremoCommand(
-                request.versionId(), request.dimensionId(), request.code(), request.name(), request.description(),
-                request.normativeGroup()))));
+        return ApiResponse.ok(EntityView.of(admin.createBaremo(toCommand(request))));
     }
 
     @PatchMapping("/baremos/{id}")
@@ -401,7 +399,9 @@ public class InstrumentController {
 
     private InstrumentAdminService.BaremoCommand toCommand(BaremoRequest request) {
         return new InstrumentAdminService.BaremoCommand(request.versionId(), request.dimensionId(), request.code(),
-                request.name(), request.description(), request.normativeGroup());
+                request.name(), request.description(), request.normativeGroup(), request.minAge(), request.maxAge(),
+                request.sexId(), request.careerId(), request.validFrom(), request.validTo(),
+                request.clearNormativeCriteria());
     }
 
     private InstrumentAdminService.BaremoRangeCommand toCommand(BaremoRangeRequest request) {
