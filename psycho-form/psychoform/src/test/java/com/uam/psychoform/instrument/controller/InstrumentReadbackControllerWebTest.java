@@ -22,6 +22,7 @@ import com.uam.psychoform.instrument.model.TipoRespuesta;
 import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.service.ImageUploadResponse;
 import com.uam.psychoform.instrument.service.InstrumentAdminService;
+import com.uam.psychoform.instrument.service.ScoringDimensionAdminService;
 import com.uam.psychoform.instrument.service.InstrumentImageService;
 import com.uam.psychoform.instrument.service.VersionTestService;
 import com.uam.psychoform.security.model.EstadoGeneral;
@@ -56,6 +57,9 @@ class InstrumentReadbackControllerWebTest {
 
     @MockitoBean
     InstrumentImageService images;
+
+    @MockitoBean
+    ScoringDimensionAdminService dimensions;
 
     @Test
     void getItemsReturnsImagesInEachItemDto() throws Exception {

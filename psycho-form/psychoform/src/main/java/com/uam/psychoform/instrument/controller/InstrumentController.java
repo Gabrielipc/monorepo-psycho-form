@@ -18,13 +18,15 @@ public class InstrumentController {
     private final VersionTestService versions;
     private final InstrumentImageService images;
     private final ScoringStrategyRegistry strategyRegistry;
+    private final ScoringDimensionAdminService dimensions;
 
     public InstrumentController(InstrumentAdminService admin, VersionTestService versions, InstrumentImageService images,
-            ScoringStrategyRegistry strategyRegistry) {
+            ScoringStrategyRegistry strategyRegistry, ScoringDimensionAdminService dimensions) {
         this.admin = admin;
         this.versions = versions;
         this.images = images;
         this.strategyRegistry = strategyRegistry;
+        this.dimensions = dimensions;
     }
 
     @GetMapping("/tests")
@@ -406,5 +408,49 @@ public class InstrumentController {
         return new InstrumentAdminService.BaremoRangeCommand(request.minScore(), request.maxScore(),
                 request.percentile(), request.category(), request.interpretation(), request.recommendation(),
                 request.order());
+    }
+
+    @GetMapping("/test-versions/{id}/dimensions")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR + " or " + SecurityPermissions.TEST_LEER)
+    public ApiResponse<?> getDimensions(@PathVariable Long id) {
+        return ApiResponse.ok(dimensions.listDimensions(id));
+    }
+
+    @PostMapping("/test-versions/{id}/dimensions")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> createDimension(@PathVariable Long id, @Valid @RequestBody DimensionRequest request) {
+        return ApiResponse.ok(dimensions.createDimension(id, new ScoringDimensionAdminService.DimensionCommand(
+                request.code(), request.name(), request.description(), request.subtestId(), request.order(),
+                request.minScore(), request.maxScore(), request.active())));
+    }
+
+    @PatchMapping("/dimensions/{id}")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> updateDimension(@PathVariable Long id, @Valid @RequestBody DimensionPatchRequest request) {
+        return ApiResponse.ok(dimensions.updateDimension(id, new ScoringDimensionAdminService.DimensionCommand(
+                request.code(), request.name(), request.description(), request.subtestId(), request.order(),
+                request.minScore(), request.maxScore(), request.active())));
+    }
+
+    @DeleteMapping("/dimensions/{id}")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> deleteDimension(@PathVariable Long id) {
+        dimensions.deleteDimension(id);
+        return ApiResponse.ok(null);
+    }
+
+    @GetMapping("/scoring-rules/{id}/option-scores")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR + " or " + SecurityPermissions.TEST_LEER)
+    public ApiResponse<?> getOptionScores(@PathVariable Long id) {
+        return ApiResponse.ok(dimensions.listOptionScores(id));
+    }
+
+    @PutMapping("/scoring-rules/{id}/option-scores")
+    @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
+    public ApiResponse<?> replaceOptionScores(@PathVariable Long id, @Valid @RequestBody OptionScoresRequest request) {
+        return ApiResponse.ok(dimensions.replaceOptionScores(id, request.rows().stream()
+                .map(row -> new ScoringDimensionAdminService.OptionScoreRow(row.optionId(), row.dimensionId(),
+                        row.score(), row.weight(), row.active()))
+                .toList()));
     }
 }
