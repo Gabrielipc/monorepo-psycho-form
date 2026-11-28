@@ -2,6 +2,8 @@ package com.uam.psychoform.scoring.service;
 
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
 import com.uam.psychoform.instrument.model.TipoRespuesta;
+import com.uam.psychoform.scoring.service.strategy.AnswerKey;
+import com.uam.psychoform.scoring.service.strategy.AnswerSnapshot;
 import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.util.Arrays;
@@ -85,29 +87,49 @@ public final class ClaveCorrectnessEvaluator {
         return Set.of();
     }
 
+    /** Datos de la clave que intervienen en la correccion, independientes de la entidad o del snapshot. */
+    private record KeyData(Long correctOptionId, String expectedText, BigDecimal expectedNumber,
+            BigDecimal tolerance) {
+    }
+
     static boolean isCorrect(TipoRespuesta tipo, ClaveRespuesta clave, List<SelectedOption> selected,
             Set<Long> setOptionIds, String textAnswer, BigDecimal numericAnswer) {
+        Long correctId = clave.getOpcionCorrecta() == null ? null : clave.getOpcionCorrecta().getId();
+        return isCorrect(tipo, new KeyData(correctId, clave.getTextoEsperado(), clave.getValorNumericoEsperado(),
+                clave.getToleranciaNumerica()), selected, setOptionIds, textAnswer, numericAnswer);
+    }
+
+    /** Correccion de una respuesta contra la clave oficial, con los snapshots de calificacion. */
+    public static boolean isCorrect(TipoRespuesta tipo, AnswerKey key, AnswerSnapshot answer) {
+        List<SelectedOption> selected = new java.util.ArrayList<>();
+        for (int i = 0; i < answer.selectedOptionIds().size(); i++) {
+            String code = i < answer.selectedOptionCodes().size() ? answer.selectedOptionCodes().get(i) : null;
+            selected.add(new SelectedOption(answer.selectedOptionIds().get(i), code));
+        }
+        return isCorrect(tipo, new KeyData(key.correctOptionId(), key.expectedText(), key.expectedNumber(),
+                key.numericTolerance()), selected, key.optionSetIds(), answer.textAnswer(), answer.numericAnswer());
+    }
+
+    private static boolean isCorrect(TipoRespuesta tipo, KeyData key, List<SelectedOption> selected,
+            Set<Long> setOptionIds, String textAnswer, BigDecimal numericAnswer) {
         if (tipo == TipoRespuesta.OPCION_MULTIPLE) {
-            return multipleChoiceIsCorrect(clave, selected, setOptionIds);
+            return multipleChoiceIsCorrect(key, selected, setOptionIds);
         }
         if (tipo == TipoRespuesta.NUMERICA) {
-            return numericIsCorrect(clave, numericAnswer);
+            return numericIsCorrect(key, numericAnswer);
         }
         if (tipo == TipoRespuesta.TEXTO_ABIERTO) {
-            return openTextIsCorrect(clave, textAnswer);
+            return openTextIsCorrect(key, textAnswer);
         }
-        return singleOptionIsCorrect(clave, selected);
+        return singleOptionIsCorrect(key, selected);
     }
 
-    private static boolean singleOptionIsCorrect(ClaveRespuesta clave, List<SelectedOption> selected) {
-        if (clave.getOpcionCorrecta() == null) {
-            return false;
-        }
-        Long correctId = clave.getOpcionCorrecta().getId();
-        return selected.stream().anyMatch(option -> correctId != null && correctId.equals(option.id()));
+    private static boolean singleOptionIsCorrect(KeyData key, List<SelectedOption> selected) {
+        Long correctId = key.correctOptionId();
+        return correctId != null && selected.stream().anyMatch(option -> correctId.equals(option.id()));
     }
 
-    private static boolean multipleChoiceIsCorrect(ClaveRespuesta clave, List<SelectedOption> selected,
+    private static boolean multipleChoiceIsCorrect(KeyData key, List<SelectedOption> selected,
             Set<Long> setOptionIds) {
         if (selected.isEmpty()) {
             return false;
@@ -116,7 +138,7 @@ public final class ClaveCorrectnessEvaluator {
             Set<Long> selectedIds = selected.stream().map(SelectedOption::id).collect(Collectors.toSet());
             return selectedIds.equals(setOptionIds);
         }
-        Set<String> expectedCodes = parseCodes(clave.getTextoEsperado());
+        Set<String> expectedCodes = parseCodes(key.expectedText());
         if (!expectedCodes.isEmpty()) {
             Set<String> selectedCodes = selected.stream()
                     .map(option -> normalizeCode(option.code()))
@@ -124,27 +146,27 @@ public final class ClaveCorrectnessEvaluator {
                     .collect(Collectors.toSet());
             return selectedCodes.equals(expectedCodes);
         }
-        if (clave.getOpcionCorrecta() != null && clave.getOpcionCorrecta().getId() != null) {
+        if (key.correctOptionId() != null) {
             Set<Long> selectedIds = selected.stream().map(SelectedOption::id).collect(Collectors.toSet());
-            return selectedIds.equals(Set.of(clave.getOpcionCorrecta().getId()));
+            return selectedIds.equals(Set.of(key.correctOptionId()));
         }
         return false;
     }
 
-    private static boolean numericIsCorrect(ClaveRespuesta clave, BigDecimal answer) {
-        if (answer == null || clave.getValorNumericoEsperado() == null) {
+    private static boolean numericIsCorrect(KeyData key, BigDecimal answer) {
+        if (answer == null || key.expectedNumber() == null) {
             return false;
         }
-        BigDecimal tolerance = clave.getToleranciaNumerica() == null ? BigDecimal.ZERO : clave.getToleranciaNumerica();
-        BigDecimal difference = answer.subtract(clave.getValorNumericoEsperado()).abs();
+        BigDecimal tolerance = key.tolerance() == null ? BigDecimal.ZERO : key.tolerance();
+        BigDecimal difference = answer.subtract(key.expectedNumber()).abs();
         return difference.compareTo(tolerance) <= 0;
     }
 
-    private static boolean openTextIsCorrect(ClaveRespuesta clave, String answer) {
-        if (answer == null || clave.getTextoEsperado() == null) {
+    private static boolean openTextIsCorrect(KeyData key, String answer) {
+        if (answer == null || key.expectedText() == null) {
             return false;
         }
-        String expected = normalizeText(clave.getTextoEsperado());
+        String expected = normalizeText(key.expectedText());
         return !expected.isEmpty() && expected.equals(normalizeText(answer));
     }
 

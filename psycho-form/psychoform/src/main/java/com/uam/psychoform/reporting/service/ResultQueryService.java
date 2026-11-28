@@ -16,27 +16,27 @@ import com.uam.psychoform.instrument.model.OpcionItem;
 import com.uam.psychoform.instrument.model.ClaveRespuesta;
 import com.uam.psychoform.instrument.model.ImagenItem;
 import com.uam.psychoform.instrument.model.ImagenOpcion;
-import com.uam.psychoform.instrument.model.Baremo;
-import com.uam.psychoform.instrument.model.RangoBaremo;
-import com.uam.psychoform.instrument.repository.BaremoRepository;
 import com.uam.psychoform.instrument.repository.ItemLookupRepository;
 import com.uam.psychoform.instrument.repository.OpcionItemLookupRepository;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.ImagenItemRepository;
 import com.uam.psychoform.instrument.repository.ImagenOpcionRepository;
-import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
 import com.uam.psychoform.scoring.model.Resultado;
 import com.uam.psychoform.scoring.model.ResultadoDimension;
 import com.uam.psychoform.scoring.model.CalificacionRespuesta;
 import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
 import com.uam.psychoform.scoring.repository.ResultadoRepository;
+import com.uam.psychoform.scoring.service.AppliedNorm;
+import com.uam.psychoform.scoring.service.BaremoResolver;
 import com.uam.psychoform.scoring.service.ClaveCorrectnessEvaluator;
+import com.uam.psychoform.scoring.service.NormativeProfiles;
 import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
 import com.uam.psychoform.security.SecurityPermissions;
 import com.uam.psychoform.security.model.EstadoGeneral;
 import jakarta.persistence.EntityNotFoundException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -62,8 +62,8 @@ public class ResultQueryService {
     private final ItemLookupRepository items;
     private final OpcionItemLookupRepository opciones;
     private final ClaveRespuestaLookupRepository claves;
-    private final BaremoRepository baremos;
-    private final RangoBaremoRepository rangosBaremo;
+    private final BaremoResolver baremoResolver;
+    private final Clock clock;
     private final RespuestaItemRepository respuestas;
     private final OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas;
     private final CalificacionRespuestaRepository calificaciones;
@@ -74,7 +74,7 @@ public class ResultQueryService {
             ResultadoRepository resultados, ResultadoDimensionRepository dimensiones,
             SesionSubtestRepository sesionSubtests, ItemLookupRepository items,
             OpcionItemLookupRepository opciones, ClaveRespuestaLookupRepository claves,
-            BaremoRepository baremos, RangoBaremoRepository rangosBaremo,
+            BaremoResolver baremoResolver, Clock clock,
             RespuestaItemRepository respuestas, OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas,
             CalificacionRespuestaRepository calificaciones, ImagenItemRepository imagenesItem,
             ImagenOpcionRepository imagenesOpcion) {
@@ -86,8 +86,8 @@ public class ResultQueryService {
         this.items = items;
         this.opciones = opciones;
         this.claves = claves;
-        this.baremos = baremos;
-        this.rangosBaremo = rangosBaremo;
+        this.baremoResolver = baremoResolver;
+        this.clock = clock;
         this.respuestas = respuestas;
         this.opcionesSeleccionadas = opcionesSeleccionadas;
         this.calificaciones = calificaciones;
@@ -105,7 +105,7 @@ public class ResultQueryService {
                         d.getPercentil(), d.getInterpretacion()))
                 .toList();
         Long versionId = resultado.getIntento().getAsignacion().getSesionAplicacion().getVersionTest().getId();
-        TotalResultInterpretationView totalInterpretation = totalInterpretation(versionId, resultado.getPuntajeTotalDirecto());
+        TotalResultInterpretationView totalInterpretation = totalInterpretation(versionId, resultado.getIntento(), resultado.getPuntajeTotalDirecto());
         return new IndividualResultView(attemptId, resultado.getId(), resultado.getEstado(),
                 resultado.getPuntajeTotalDirecto(), totalInterpretation, dimensionViews, DISCLAIMER);
     }
@@ -152,7 +152,7 @@ public class ResultQueryService {
                             d.getDimensionResultado().getNombreDimension(), d.getPuntajeDirecto(), d.getCategoria(),
                             d.getPercentil(), d.getInterpretacion()))
                     .toList();
-            totalInterpretation = totalInterpretation(version.getId(), totalScore);
+            totalInterpretation = totalInterpretation(version.getId(), intento, totalScore);
         }
 
         Map<Long, CalificacionRespuesta> qualificationsByRespuestaId = Map.of();
@@ -328,24 +328,23 @@ public class ResultQueryService {
         );
     }
 
-    private TotalResultInterpretationView totalInterpretation(Long versionId, BigDecimal totalScore) {
+    private TotalResultInterpretationView totalInterpretation(Long versionId, IntentoTest intento,
+            BigDecimal totalScore) {
         if (versionId == null || totalScore == null) {
             return null;
         }
-        Optional<Baremo> baremo = baremos.findPreferredTotalBaremo(versionId);
-        if (baremo.isEmpty()) {
-            return null;
-        }
-        Optional<RangoBaremo> range = rangosBaremo.findMatchingRange(baremo.get().getId(), totalScore);
-        return range.map(r -> new TotalResultInterpretationView(
-                baremo.get().getId(),
-                baremo.get().getCodigoBaremo(),
-                r.getId(),
-                r.getCategoria(),
-                r.getPercentil(),
-                r.getInterpretacion(),
-                r.getRecomendacion()
-        )).orElse(null);
+        Optional<AppliedNorm> norm = baremoResolver.resolve(versionId, null, NormativeProfiles.of(intento, clock),
+                totalScore);
+        return norm.filter(applied -> applied.range() != null)
+                .map(applied -> new TotalResultInterpretationView(
+                        applied.baremo().getId(),
+                        applied.baremo().getCodigoBaremo(),
+                        applied.range().getId(),
+                        applied.range().getCategoria(),
+                        applied.range().getPercentil(),
+                        applied.range().getInterpretacion(),
+                        applied.range().getRecomendacion()
+                )).orElse(null);
     }
 
     @PreAuthorize(SecurityPermissions.RESULTADO_AGREGADO_VER)

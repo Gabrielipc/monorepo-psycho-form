@@ -23,7 +23,7 @@ import com.uam.psychoform.reporting.controller.ResultController;
 import com.uam.psychoform.reporting.service.AttemptQueryService;
 import com.uam.psychoform.reporting.service.ReportRegistryService;
 import com.uam.psychoform.reporting.service.ResultQueryService;
-import com.uam.psychoform.scoring.service.ClaveSimpleScoringService;
+import com.uam.psychoform.scoring.service.ScoringService;
 import com.uam.psychoform.security.controller.AuthController;
 import com.uam.psychoform.security.controller.RoleController;
 import com.uam.psychoform.security.controller.UserController;
@@ -67,7 +67,7 @@ class SecurityArchitectureTest {
             InstrumentAdminService.class,
             VersionTestService.class,
             AuditLogService.class,
-            ClaveSimpleScoringService.class,
+            ScoringService.class,
             AttemptQueryService.class,
             ResultQueryService.class,
             ReportRegistryService.class,

@@ -6,6 +6,7 @@ import com.uam.psychoform.instrument.model.*;
 import com.uam.psychoform.instrument.service.*;
 import com.uam.psychoform.dto.ApiResponse;
 import com.uam.psychoform.dto.EntityView;
+import com.uam.psychoform.scoring.service.ScoringStrategyRegistry;
 import com.uam.psychoform.security.SecurityPermissions;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,11 +17,14 @@ public class InstrumentController {
     private final InstrumentAdminService admin;
     private final VersionTestService versions;
     private final InstrumentImageService images;
+    private final ScoringStrategyRegistry strategyRegistry;
 
-    public InstrumentController(InstrumentAdminService admin, VersionTestService versions, InstrumentImageService images) {
+    public InstrumentController(InstrumentAdminService admin, VersionTestService versions, InstrumentImageService images,
+            ScoringStrategyRegistry strategyRegistry) {
         this.admin = admin;
         this.versions = versions;
         this.images = images;
+        this.strategyRegistry = strategyRegistry;
     }
 
     @GetMapping("/tests")
@@ -273,7 +277,9 @@ public class InstrumentController {
     @GetMapping("/scoring/strategies")
     @PreAuthorize(SecurityPermissions.CALIFICACION_CONFIGURAR)
     public ApiResponse<?> strategies() {
-        return ApiResponse.ok(EntityView.of(admin.listStrategies()));
+        return ApiResponse.ok(EntityView.of(admin.listStrategies().stream()
+                .map(strategy -> ScoringStrategyDTO.from(strategy, strategyRegistry.isImplemented(strategy.getCodigo())))
+                .toList()));
     }
 
     @GetMapping("/subtests/{id}/scoring-rules")

@@ -5,6 +5,10 @@ import com.uam.psychoform.instrument.model.VersionTest;
 import com.uam.psychoform.instrument.repository.BaremoPublicationRepository;
 import com.uam.psychoform.instrument.repository.ReglaCalificacionPublicationRepository;
 import com.uam.psychoform.instrument.repository.VersionTestRepository;
+import com.uam.psychoform.scoring.service.ScoringContextLoader;
+import com.uam.psychoform.scoring.service.ScoringStrategyRegistry;
+import com.uam.psychoform.scoring.service.strategy.ScoringConfiguration;
+import com.uam.psychoform.scoring.service.strategy.ScoringStrategy;
 import com.uam.psychoform.security.CurrentActor;
 import com.uam.psychoform.security.SecurityPermissions;
 import com.uam.psychoform.security.model.Usuario;
@@ -12,6 +16,7 @@ import com.uam.psychoform.security.repository.UsuarioRepository;
 import jakarta.persistence.EntityNotFoundException;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,25 +31,30 @@ public class VersionTestService {
     private final CurrentActor currentActor;
     private final ReglaCalificacionPublicationRepository reglas;
     private final BaremoPublicationRepository baremos;
+    private final ScoringStrategyRegistry strategies;
+    private final ScoringContextLoader scoringLoader;
     private final Clock clock;
 
     public VersionTestService(VersionTestRepository repository) {
-        this(repository, null, null, Clock.systemUTC(), null, null);
+        this(repository, null, null, Clock.systemUTC(), null, null, null, null);
     }
 
     public VersionTestService(VersionTestRepository repository, UsuarioRepository usuarios, CurrentActor currentActor,
             Clock clock) {
-        this(repository, usuarios, currentActor, clock, null, null);
+        this(repository, usuarios, currentActor, clock, null, null, null, null);
     }
 
     @Autowired
     public VersionTestService(VersionTestRepository repository, UsuarioRepository usuarios, CurrentActor currentActor,
-            Clock clock, ReglaCalificacionPublicationRepository reglas, BaremoPublicationRepository baremos) {
+            Clock clock, ReglaCalificacionPublicationRepository reglas, BaremoPublicationRepository baremos,
+            ScoringStrategyRegistry strategies, ScoringContextLoader scoringLoader) {
         this.repository = repository;
         this.usuarios = usuarios;
         this.currentActor = currentActor;
         this.reglas = reglas;
         this.baremos = baremos;
+        this.strategies = strategies;
+        this.scoringLoader = scoringLoader;
         this.clock = clock;
     }
 
@@ -97,9 +107,23 @@ public class VersionTestService {
             throw new IllegalStateException("La versión requiere reglas de calificación activas para publicarse");
         }
         baremos.publishActiveByVersionId(versionId, actor, approvedAt);
+        validateScoringConfiguration(version);
         version.setEstado(EstadoVersionTest.PUBLICADO);
         version.setPublicadoEn(LocalDateTime.now(clock));
         repository.save(version);
         return version;
+    }
+
+    /**
+     * La estrategia de la version debe estar implementada y aceptar su configuracion. Corre despues de promover reglas y
+     * baremos, para ver la configuracion oficial, y antes de marcar la version como PUBLICADO (misma transaccion).
+     */
+    private void validateScoringConfiguration(VersionTest version) {
+        ScoringStrategy strategy = strategies.require(version.getEstrategiaCalificacion());
+        ScoringConfiguration configuration = scoringLoader.loadConfiguration(version.getId());
+        List<String> problems = strategy.validateConfiguration(configuration);
+        if (!problems.isEmpty()) {
+            throw new IllegalStateException("La version no se puede publicar: " + String.join("; ", problems));
+        }
     }
 }

@@ -1,5 +1,10 @@
 package com.uam.psychoform.instrument.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectReader;
 import com.uam.psychoform.instrument.model.*;
 import com.uam.psychoform.instrument.dto.ImageResourceDTO;
 import com.uam.psychoform.instrument.dto.ItemDTO;
@@ -33,6 +38,10 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Transactional(readOnly = true)
 public class InstrumentAdminService {
+    private static final String PARAMETERS_ERROR = "parametros debe ser un objeto JSON valido";
+    private static final ObjectReader PARAMETERS_READER = new ObjectMapper().readerFor(JsonNode.class)
+            .with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     private final EntityManager em;
     private final VersionTestRepository versions;
     private final UsuarioRepository users;
@@ -252,12 +261,28 @@ public class InstrumentAdminService {
         rule.setPrioridad(command.priority() == null ? 1 : command.priority());
         rule.setActiva(true);
         rule.setEstado(EstadoConfiguracion.BORRADOR);
-        rule.setParametros(command.parametersJson() == null ? "{}" : command.parametersJson());
+        rule.setParametros(validParameters(command.parametersJson()));
         rule.setObservacion(command.observation());
         rule.setCreadoPor(currentUser());
         rule.setCreadoEn(LocalDateTime.now(clock));
         em.persist(rule);
         return rule;
+    }
+
+    /** {@code parametros} debe ser un objeto JSON valido; si es nulo se guarda {@code {}}. */
+    private static String validParameters(String parametersJson) {
+        if (parametersJson == null) {
+            return "{}";
+        }
+        try {
+            JsonNode node = PARAMETERS_READER.readTree(parametersJson);
+            if (node == null || !node.isObject()) {
+                throw new IllegalArgumentException(PARAMETERS_ERROR);
+            }
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException(PARAMETERS_ERROR);
+        }
+        return parametersJson;
     }
 
     @Transactional
@@ -269,7 +294,7 @@ public class InstrumentAdminService {
         rule.setEstrategiaCalificacion(find(EstrategiaCalificacion.class, command.strategyId()));
         rule.setTipoRegla(command.ruleType());
         rule.setPrioridad(command.priority() == null ? 1 : command.priority());
-        rule.setParametros(command.parametersJson() == null ? "{}" : command.parametersJson());
+        rule.setParametros(validParameters(command.parametersJson()));
         rule.setObservacion(command.observation());
         return rule;
     }

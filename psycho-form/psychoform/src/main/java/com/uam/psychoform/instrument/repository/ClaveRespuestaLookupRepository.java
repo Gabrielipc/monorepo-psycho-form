@@ -16,7 +16,9 @@ public interface ClaveRespuestaLookupRepository extends JpaRepository<ClaveRespu
 
     @Query("""
             select c from ClaveRespuesta c
-            join c.reglaCalificacion r
+            join fetch c.reglaCalificacion r
+            join fetch c.item
+            left join fetch c.opcionCorrecta
             where r.versionTest.id = :versionTestId
               and r.activa = true
               and r.estado in :estados

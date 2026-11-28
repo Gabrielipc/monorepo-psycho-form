@@ -17,18 +17,18 @@ import com.uam.psychoform.instrument.model.Baremo;
 import com.uam.psychoform.instrument.model.DimensionResultado;
 import com.uam.psychoform.instrument.model.RangoBaremo;
 import com.uam.psychoform.instrument.model.VersionTest;
-import com.uam.psychoform.instrument.repository.BaremoRepository;
 import com.uam.psychoform.instrument.repository.ItemLookupRepository;
 import com.uam.psychoform.instrument.repository.OpcionItemLookupRepository;
 import com.uam.psychoform.instrument.repository.ClaveRespuestaLookupRepository;
 import com.uam.psychoform.instrument.repository.ImagenItemRepository;
 import com.uam.psychoform.instrument.repository.ImagenOpcionRepository;
-import com.uam.psychoform.instrument.repository.RangoBaremoRepository;
 import com.uam.psychoform.scoring.model.Resultado;
 import com.uam.psychoform.scoring.model.ResultadoDimension;
 import com.uam.psychoform.scoring.repository.ResultadoDimensionRepository;
 import com.uam.psychoform.scoring.repository.ResultadoRepository;
 import com.uam.psychoform.scoring.repository.CalificacionRespuestaRepository;
+import com.uam.psychoform.scoring.service.AppliedNorm;
+import com.uam.psychoform.scoring.service.BaremoResolver;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.List;
@@ -46,8 +46,7 @@ class ResultQueryServiceTest {
     private final ItemLookupRepository items = Mockito.mock(ItemLookupRepository.class);
     private final OpcionItemLookupRepository opciones = Mockito.mock(OpcionItemLookupRepository.class);
     private final ClaveRespuestaLookupRepository claves = Mockito.mock(ClaveRespuestaLookupRepository.class);
-    private final BaremoRepository baremos = Mockito.mock(BaremoRepository.class);
-    private final RangoBaremoRepository rangosBaremo = Mockito.mock(RangoBaremoRepository.class);
+    private final BaremoResolver baremoResolver = Mockito.mock(BaremoResolver.class);
     private final RespuestaItemRepository respuestas = Mockito.mock(RespuestaItemRepository.class);
     private final OpcionSeleccionadaRespuestaRepository opcionesSeleccionadas = Mockito.mock(OpcionSeleccionadaRespuestaRepository.class);
     private final CalificacionRespuestaRepository calificaciones = Mockito.mock(CalificacionRespuestaRepository.class);
@@ -57,7 +56,7 @@ class ResultQueryServiceTest {
     private final ResultQueryService service = new ResultQueryService(
             asignaciones, intentos, resultados, dimensiones,
             sesionSubtests, items, opciones, claves,
-            baremos, rangosBaremo,
+            baremoResolver, java.time.Clock.systemUTC(),
             respuestas, opcionesSeleccionadas, calificaciones,
             imagenesItem, imagenesOpcion
     );
@@ -87,7 +86,8 @@ class ResultQueryServiceTest {
         resultadoDimension.setInterpretacion("Interpretacion aprobada");
         when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(resultado));
         when(dimensiones.findByResultadoId(8L)).thenReturn(List.of(resultadoDimension));
-        when(baremos.findPreferredTotalBaremo(100L)).thenReturn(Optional.empty());
+        when(baremoResolver.resolve(Mockito.eq(100L), Mockito.isNull(), Mockito.any(), Mockito.any()))
+                .thenReturn(Optional.empty());
 
         ResultQueryService.IndividualResultView view = service.getAttemptResult(7L);
 
@@ -119,8 +119,8 @@ class ResultQueryServiceTest {
         rango.setRecomendacion(null);
         when(resultados.findByIntentoId(5L)).thenReturn(Optional.of(resultado));
         when(dimensiones.findByResultadoId(8L)).thenReturn(List.of());
-        when(baremos.findPreferredTotalBaremo(3L)).thenReturn(Optional.of(baremo));
-        when(rangosBaremo.findMatchingRange(6L, new BigDecimal("100.00"))).thenReturn(Optional.of(rango));
+        when(baremoResolver.resolve(Mockito.eq(3L), Mockito.isNull(), Mockito.any(), Mockito.eq(new BigDecimal("100.00"))))
+                .thenReturn(Optional.of(new AppliedNorm(baremo, rango)));
 
         ResultQueryService.IndividualResultView view = service.getAttemptResult(5L);
 
@@ -225,7 +225,6 @@ class ResultQueryServiceTest {
         when(intentos.findByIdWithAsignacionAndParticipanteAndSesion(7L)).thenReturn(Optional.of(intento));
         when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(resultado));
         when(dimensiones.findByResultadoId(8L)).thenReturn(List.of());
-        when(baremos.findPreferredTotalBaremo(Mockito.anyLong())).thenReturn(Optional.empty());
         when(calificaciones.findByResultadoId(8L)).thenReturn(List.of());
         when(sesionSubtests.findBySesionAplicacionIdWithSubtestOrderByNumeroOrdenAsc(Mockito.anyLong())).thenReturn(List.of());
 
@@ -380,7 +379,6 @@ class ResultQueryServiceTest {
         when(intentos.findByIdWithAsignacionAndParticipanteAndSesion(7L)).thenReturn(Optional.of(intento));
         when(resultados.findByIntentoId(7L)).thenReturn(Optional.of(resultado));
         when(dimensiones.findByResultadoId(8L)).thenReturn(List.of());
-        when(baremos.findPreferredTotalBaremo(Mockito.anyLong())).thenReturn(Optional.empty());
         when(calificaciones.findByResultadoId(8L)).thenReturn(List.of(d.calificacion));
         when(sesionSubtests.findBySesionAplicacionIdWithSubtestOrderByNumeroOrdenAsc(5L)).thenReturn(List.of(sesionSubtest));
         when(items.findBySubtestIdInAndEstadoOrderBySubtestAndItemOrder(Mockito.anyCollection(), Mockito.any()))
